@@ -27,15 +27,125 @@ local ParseOption = loadModule("ParseOption")
 local Submodule = loadModule("Submodule")
 local TomlParser = loadModule("TomlParser")
 
-local function findDefaultProjectConfigPath(config, fileSystemUtils)
-	local projectConfigFileName = config.ProjectConfigFileName
-	for _, candidate in config.SourceCandidates do
-		local path = fileSystemUtils.JoinPath(candidate, projectConfigFileName)
-		if FileSystem.isFile(path) then
-			return path
+local function resolveSourceRoot(
+	candidates: { string },
+	templatesRootName: string,
+	fileSystemUtils
+): string?
+	for _, candidate in candidates do
+		local templatesRoot = fileSystemUtils.JoinPath(candidate, templatesRootName)
+		if FileSystem.isDir(templatesRoot) then
+			return candidate
 		end
 	end
 	return nil
+end
+
+local function listTemplateNames(templateRoots: { string }, fileSystemUtils): { string }
+	local templateNameSet: { [string]: boolean } = {}
+	for _, templatesRoot in templateRoots do
+		if templatesRoot ~= "" and FileSystem.isDir(templatesRoot) then
+			local ok, entries = pcall(FileSystem.readDir, templatesRoot)
+			if ok and entries ~= nil then
+				for _, entry in entries do
+					local path = fileSystemUtils.JoinPath(templatesRoot, entry)
+					if FileSystem.isDir(path) then
+						templateNameSet[entry] = true
+					end
+				end
+			end
+		end
+	end
+
+	local templateNames: { string } = {}
+	for name in templateNameSet do
+		table.insert(templateNames, name)
+	end
+
+	table.sort(templateNames)
+	return templateNames
+end
+
+local function collectTemplateOptions(config, fileSystemUtils): { string }
+	local roots: { string } = {}
+	local srcRoot = resolveSourceRoot(
+		config.SourceCandidates,
+		config.TemplatesRootName,
+		fileSystemUtils
+	)
+	if srcRoot ~= nil then
+		table.insert(roots, fileSystemUtils.JoinPath(srcRoot, config.TemplatesRootName))
+	end
+
+	if FileSystem.isDir(config.ProjectTemplatesRootPath) then
+		table.insert(roots, config.ProjectTemplatesRootPath)
+	end
+
+	return listTemplateNames(roots, fileSystemUtils)
+end
+
+local function filterOptionalTemplates(templateNames: { string }, baseTemplateName: string): { string }
+	local optionalTemplates: { string } = {}
+	for _, name in templateNames do
+		if name ~= baseTemplateName then
+			table.insert(optionalTemplates, name)
+		end
+	end
+	return optionalTemplates
+end
+
+local function selectOptionalTemplates(optionalTemplates: { string }): { string }
+	if #optionalTemplates == 0 then
+		return {}
+	end
+
+	print("[Init] Base template is always included.")
+	print("[Init] Optional templates:")
+	for index, name in optionalTemplates do
+		print(`[Init] {index}) {name}`)
+	end
+	print("[Init] Enter numbers separated by commas (empty for base only):")
+
+	local input = io.read()
+	if input == nil or input == "" then
+		return {}
+	end
+
+	local selectedIndexSet: { [number]: boolean } = {}
+	for token in input:gmatch("[^,%s]+") do
+		local index = tonumber(token)
+		if index ~= nil and optionalTemplates[index] ~= nil then
+			selectedIndexSet[index] = true
+		end
+	end
+
+	local selected: { string } = {}
+	for index, name in optionalTemplates do
+		if selectedIndexSet[index] then
+			table.insert(selected, name)
+		end
+	end
+
+	return selected
+end
+
+local function buildProjectConfigContent(templates: { string }): string
+	local quoted: { string } = {}
+	for _, name in templates do
+		table.insert(quoted, `"{name}"`)
+	end
+	return `Templates = [{table.concat(quoted, ", ")}]\n`
+end
+
+local function writeProjectConfig(path: string, content: string, fileSystemUtils): (boolean, string?)
+	fileSystemUtils.EnsureParentDirectory(path)
+	local okWrite, err = pcall(function()
+		FileSystem.writeFile(path, content)
+	end)
+	if not okWrite then
+		return false, tostring(err)
+	end
+	return true, nil
 end
 
 local function initProjectConfig(config, fileSystemUtils)
@@ -44,18 +154,21 @@ local function initProjectConfig(config, fileSystemUtils)
 		return true, { Status = "Exists", Path = projectConfigPath }
 	end
 
-	local defaultPath = findDefaultProjectConfigPath(config, fileSystemUtils)
-	if defaultPath == nil then
-		return false, { Code = "MissingDefaultProjectConfig" }
+	local templateNames = collectTemplateOptions(config, fileSystemUtils)
+	local optionalTemplates = filterOptionalTemplates(templateNames, config.BaseTemplateName)
+	local selectedTemplates = selectOptionalTemplates(optionalTemplates)
+
+	local templates: { string } = { config.BaseTemplateName }
+	for _, name in selectedTemplates do
+		table.insert(templates, name)
 	end
 
-	local okCopy, err = pcall(function()
-		fileSystemUtils.CopyFile(defaultPath, projectConfigPath)
-	end)
-	if not okCopy then
+	local content = buildProjectConfigContent(templates)
+	local okWrite, err = writeProjectConfig(projectConfigPath, content, fileSystemUtils)
+	if not okWrite then
 		return false, {
 			Code = "WriteProjectConfigFailed",
-			Detail = tostring(err),
+			Detail = err or "",
 		}
 	end
 
@@ -66,9 +179,7 @@ local optionName = ParseOption("install")
 if optionName == "init" then
 	local okInit, initResult = initProjectConfig(Config, FileSystemUtils)
 	if not okInit then
-		if initResult.Code == "MissingDefaultProjectConfig" then
-			print("[Error] Failed to locate default setup_configs.toml.")
-		elseif initResult.Code == "WriteProjectConfigFailed" then
+		if initResult.Code == "WriteProjectConfigFailed" then
 			print(`[Error] Failed to write setup_configs.toml: {initResult.Detail}`)
 		else
 			print("[Error] Failed to initialize setup_configs.toml.")
