@@ -16,6 +16,50 @@ local ManagedBlock = require("@self/modules/ManagedBlock")
 local Submodule = require("@self/modules/Submodule")
 local TomlParser = require("@self/modules/TomlParser")
 
+local function printUsage()
+	print("Usage: lune run src/init [install|init] [options]")
+	print("")
+	print("Commands:")
+	print("  install   Apply templates and submodules (default).")
+	print("  init      Create bakery_project_configs.toml.")
+	print("")
+	print("Options:")
+	print("  -h, --help    Show this help.")
+	print("  --force       Overwrite bakery_project_configs.toml when using init.")
+end
+
+local function parseArgs(args: { string })
+	local commandName = nil
+	local force = false
+	local help = false
+	local errors: { string } = {}
+
+	for _, arg in args do
+		if arg == "-h" or arg == "--help" then
+			help = true
+		elseif arg == "--force" then
+			force = true
+		elseif arg == "install" or arg == "init" then
+			if commandName ~= nil and commandName ~= arg then
+				table.insert(errors, `Conflicting command "{arg}".`)
+			else
+				commandName = arg
+			end
+		elseif arg:sub(1, 1) == "-" then
+			table.insert(errors, `Unknown option "{arg}".`)
+		else
+			table.insert(errors, `Unknown argument "{arg}".`)
+		end
+	end
+
+	return {
+		Command = commandName or "install",
+		Force = force,
+		Help = help,
+		Errors = errors,
+	}
+end
+
 local function resolveSourceRoot(
 	candidates: { string },
 	templatesRootName: string,
@@ -151,9 +195,10 @@ local function writeProjectConfig(
 	return true, nil
 end
 
-local function initProjectConfig(config, fileSystemUtils)
+local function initProjectConfig(config, fileSystemUtils, forceInit: boolean)
 	local projectConfigPath = config.ProjectConfigFileName
-	if FileSystem.isFile(projectConfigPath) then
+	local hadExisting = FileSystem.isFile(projectConfigPath)
+	if hadExisting and not forceInit then
 		return true, { Status = "Exists", Path = projectConfigPath }
 	end
 
@@ -175,12 +220,27 @@ local function initProjectConfig(config, fileSystemUtils)
 		}
 	end
 
-	return true, { Status = "Created", Path = projectConfigPath }
+	local status = if hadExisting then "Overwritten" else "Created"
+	return true, { Status = status, Path = projectConfigPath }
 end
 
-local optionName = Process.args[1] or "install"
+local options = parseArgs(Process.args)
+if #options.Errors > 0 then
+	for _, message in options.Errors do
+		print(`[Error] {message}`)
+	end
+	printUsage()
+	Process.exit(1)
+end
+
+if options.Help then
+	printUsage()
+	Process.exit(0)
+end
+
+local optionName = options.Command
 if optionName == "init" then
-	local okInit, initResult = initProjectConfig(Config, FileSystemUtils)
+	local okInit, initResult = initProjectConfig(Config, FileSystemUtils, options.Force)
 	if not okInit then
 		if initResult.Code == "WriteProjectConfigFailed" then
 			print(`[Error] Failed to write bakery_project_configs.toml: {initResult.Detail}`)
@@ -192,6 +252,8 @@ if optionName == "init" then
 
 	if initResult.Status == "Created" then
 		print(`[Init] bakery_project_configs.toml created at "{initResult.Path}".`)
+	elseif initResult.Status == "Overwritten" then
+		print(`[Init] bakery_project_configs.toml overwritten at "{initResult.Path}".`)
 	else
 		print(`[Info] bakery_project_configs.toml already exists at "{initResult.Path}".`)
 	end
