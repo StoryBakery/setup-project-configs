@@ -5,10 +5,11 @@
 local FileSystem = require("@lune/fs")
 
 local function normalizeSourcePath(source: string): string
-	if source:sub(1, 1) == "@" then
-		return source:sub(2)
+	local normalized = source
+	if normalized:sub(1, 1) == "@" then
+		normalized = normalized:sub(2)
 	end
-	return source
+	return normalized:gsub("\\", "/")
 end
 
 local function isAbsolutePath(path: string): boolean
