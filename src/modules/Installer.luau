@@ -4,7 +4,7 @@
 
 local FileSystem = require("@lune/fs")
 
-local TemplateRoots = require("@self/modules/TemplateRoots")
+local TemplateRoots = require("./TemplateRoots")
 
 local function trim(value: string): string
 	return value:match("^%s*(.-)%s*$")
