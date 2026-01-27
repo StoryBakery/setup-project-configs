@@ -8,6 +8,10 @@
 /*.rbxm
 /*.rbxmx
 
+# darklua
+/out
+/.darklua-sourcemap.json
+
 # Lune
 luau_packages/
 lune_packages/
@@ -15,7 +19,6 @@ roblox_packages/
 
 # Pesde
 .pesde/
-pesde.lock
 
 # Wally
 /Packages
@@ -25,14 +28,10 @@ wally.lock
 
 # Git
 
-# VS Code
-.vscode
-
 # Misc
 .DS_Store
+.vscode
 
 /node_modules
 /build
 
-# Tests
-/tests/.tmp
