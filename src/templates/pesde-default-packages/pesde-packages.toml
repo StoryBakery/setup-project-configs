@@ -1,3 +1,4 @@
-Packages = [
-    "https://github.com/StoryBakery/pesde-gitrev#a2d6f1e71ac6264ff2b48fd2178271f80135772e",
-]
+[[Packages]]
+Spec = "https://github.com/StoryBakery/pesde-gitrev#a2d6f1e71ac6264ff2b48fd2178271f80135772e"
+Dev = true
+Peer = false

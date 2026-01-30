@@ -436,11 +436,39 @@ local function printInstallError(installError)
 	print(`[Error] Config install failed ({codeLabel}).`)
 end
 
-local function addPesdePackage(packageSpec: string, configRoot: string): (boolean, string?)
+local function addPesdePackage(packageEntry, configRoot: string): (boolean, string?)
+	local packageSpec = packageEntry
+	local isDev = false
+	local isPeer = false
+	if type(packageEntry) == "table" then
+		packageSpec = packageEntry.Spec
+		isDev = packageEntry.Dev == true
+		isPeer = packageEntry.Peer == true
+	end
+
+	if type(packageSpec) ~= "string" or packageSpec == "" then
+		return false, "Invalid package spec."
+	end
+
+	local args = { "add", packageSpec }
+	if isDev then
+		table.insert(args, "--dev")
+	end
+	if isPeer then
+		table.insert(args, "--peer")
+	end
+	if type(packageEntry) == "table" then
+		local target = packageEntry.Target
+		if type(target) == "string" and target ~= "" then
+			table.insert(args, "--target")
+			table.insert(args, target)
+		end
+	end
+
 	local okExec, resultOrErr = pcall(
 		Process.exec,
 		"pesde",
-		{ "add", packageSpec },
+		args,
 		{ capture = true, cwd = configRoot }
 	)
 	if not okExec then
@@ -577,11 +605,21 @@ for _, submodule in submodules do
 end
 
 local pesdePackages = installResult.PesdePackages or {}
-for _, packageSpec in pesdePackages do
-	local okAdd, err = addPesdePackage(packageSpec, configRoot)
+for _, packageEntry in pesdePackages do
+	local packageSpec = packageEntry
+	if type(packageEntry) == "table" then
+		packageSpec = packageEntry.Spec
+	end
+
+	local okAdd, err = addPesdePackage(packageEntry, configRoot)
 	if not okAdd then
-		print(`[Error] Failed to add pesde package "{packageSpec}": {err}`)
+		local label = packageSpec or "unknown"
+		print(`[Error] Failed to add pesde package "{label}": {err}`)
 		Process.exit(1)
+	end
+
+	if packageSpec == nil then
+		packageSpec = "unknown"
 	end
 	print(`[Pesde] "{packageSpec}" added`)
 end

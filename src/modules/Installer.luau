@@ -522,6 +522,105 @@ local function collectTemplateSubmodules(
 	return true, parseResult
 end
 
+local function appendPesdePackagesFromList(
+	results: { [number]: { [string]: any } },
+	packages,
+	pesdePath: string,
+	defaultDev: boolean,
+	defaultPeer: boolean
+)
+	if packages == nil then
+		return true, nil
+	end
+	if type(packages) ~= "table" then
+		return false, { Code = "InvalidTemplatePesde", Path = pesdePath }
+	end
+
+	local firstEntry = packages[1]
+	if firstEntry == nil then
+		return true, nil
+	end
+
+	local firstType = type(firstEntry)
+	if firstType == "string" then
+		for index, entry in packages do
+			if type(entry) ~= "string" or entry == "" then
+				return false, {
+					Code = "InvalidTemplatePesdeEntry",
+					Path = pesdePath,
+					Index = index,
+				}
+			end
+			table.insert(results, {
+				Spec = entry,
+				Dev = defaultDev,
+				Peer = defaultPeer,
+				Target = nil,
+			})
+		end
+		return true, nil
+	end
+
+	if firstType ~= "table" then
+		return false, { Code = "InvalidTemplatePesde", Path = pesdePath }
+	end
+
+	for index, entry in packages do
+		if type(entry) ~= "table" then
+			return false, {
+				Code = "InvalidTemplatePesdeEntry",
+				Path = pesdePath,
+				Index = index,
+			}
+		end
+
+		local spec = entry.Spec or entry.Package or entry.Url
+		if type(spec) ~= "string" or spec == "" then
+			return false, {
+				Code = "InvalidTemplatePesdeEntry",
+				Path = pesdePath,
+				Index = index,
+			}
+		end
+
+		local devValue = entry.Dev
+		if devValue ~= nil and type(devValue) ~= "boolean" then
+			return false, {
+				Code = "InvalidTemplatePesdeEntry",
+				Path = pesdePath,
+				Index = index,
+			}
+		end
+
+		local peerValue = entry.Peer
+		if peerValue ~= nil and type(peerValue) ~= "boolean" then
+			return false, {
+				Code = "InvalidTemplatePesdeEntry",
+				Path = pesdePath,
+				Index = index,
+			}
+		end
+
+		local targetValue = entry.Target
+		if targetValue ~= nil and (type(targetValue) ~= "string" or targetValue == "") then
+			return false, {
+				Code = "InvalidTemplatePesdeEntry",
+				Path = pesdePath,
+				Index = index,
+			}
+		end
+
+		table.insert(results, {
+			Spec = spec,
+			Dev = if devValue == nil then defaultDev else devValue,
+			Peer = if peerValue == nil then defaultPeer else peerValue,
+			Target = targetValue,
+		})
+	end
+
+	return true, nil
+end
+
 local function collectTemplatePesdePackages(
 	templateRoot: string,
 	templatePesdeFileName: string,
@@ -557,24 +656,38 @@ local function collectTemplatePesdePackages(
 		}
 	end
 
-	local packages = result.Packages
-	if packages == nil then
-		return true, {}
-	end
-	if type(packages) ~= "table" then
-		return false, { Code = "InvalidTemplatePesde", Path = pesdePath }
+	local results: { [number]: { [string]: any } } = {}
+	local okAppend, appendError = appendPesdePackagesFromList(
+		results,
+		result.Packages,
+		pesdePath,
+		false,
+		false
+	)
+	if not okAppend then
+		return false, appendError
 	end
 
-	local results: { string } = {}
-	for index, entry in packages do
-		if type(entry) ~= "string" or entry == "" then
-			return false, {
-				Code = "InvalidTemplatePesdeEntry",
-				Path = pesdePath,
-				Index = index,
-			}
-		end
-		table.insert(results, entry)
+	okAppend, appendError = appendPesdePackagesFromList(
+		results,
+		result.DevPackages,
+		pesdePath,
+		true,
+		false
+	)
+	if not okAppend then
+		return false, appendError
+	end
+
+	okAppend, appendError = appendPesdePackagesFromList(
+		results,
+		result.PeerPackages,
+		pesdePath,
+		false,
+		true
+	)
+	if not okAppend then
+		return false, appendError
 	end
 
 	return true, results
@@ -919,8 +1032,8 @@ local function install(config, fileSystemUtils, tomlParser, managedBlock)
 	local templateCounts: { [string]: number } = {}
 	local submodules: { [number]: { [string]: string } } = {}
 	local submoduleUrlByPath: { [string]: string } = {}
-	local pesdePackages: { string } = {}
-	local pesdePackageSet: { [string]: boolean } = {}
+	local pesdePackages: { [number]: { [string]: any } } = {}
+	local pesdePackagesBySpec: { [string]: { [string]: any } } = {}
 	local scripts: { [number]: { [string]: any } } = {}
 	local order = resolvedResult.Order
 	local infos = resolvedResult.Infos
@@ -1003,10 +1116,31 @@ local function install(config, fileSystemUtils, tomlParser, managedBlock)
 			return false, pesdeResult
 		end
 
-		for _, packageSpec in pesdeResult do
-			if not pesdePackageSet[packageSpec] then
-				pesdePackageSet[packageSpec] = true
-				table.insert(pesdePackages, packageSpec)
+		for _, packageEntry in pesdeResult do
+			local spec = packageEntry.Spec
+			local existing = pesdePackagesBySpec[spec]
+			if existing ~= nil then
+				existing.Dev = existing.Dev or packageEntry.Dev
+				existing.Peer = existing.Peer or packageEntry.Peer
+				if existing.Target == nil then
+					existing.Target = packageEntry.Target
+				elseif packageEntry.Target ~= nil and existing.Target ~= packageEntry.Target then
+					return false, {
+						Code = "DuplicatePesdeTarget",
+						Spec = spec,
+						Target = existing.Target,
+						OtherTarget = packageEntry.Target,
+					}
+				end
+			else
+				local entry = {
+					Spec = spec,
+					Dev = packageEntry.Dev == true,
+					Peer = packageEntry.Peer == true,
+					Target = packageEntry.Target,
+				}
+				pesdePackagesBySpec[spec] = entry
+				table.insert(pesdePackages, entry)
 			end
 		end
 

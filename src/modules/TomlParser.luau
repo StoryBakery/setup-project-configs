@@ -40,6 +40,16 @@ local function parseString(value: string): (boolean, string?)
 	return true, unescapeString(inner)
 end
 
+local function parseBoolean(value: string): (boolean, boolean?)
+	if value == "true" then
+		return true, true
+	end
+	if value == "false" then
+		return true, false
+	end
+	return false, nil
+end
+
 local function parseStringArray(value: string): (boolean, { string }?)
 	local body = value:match("^%[(.*)%]$")
 	if body == nil then
@@ -87,6 +97,11 @@ local function parseLine(line: string): (boolean, string?, any?)
 	local okString, parsedString = parseString(value)
 	if okString then
 		return true, key, parsedString
+	end
+
+	local okBoolean, parsedBoolean = parseBoolean(value)
+	if okBoolean then
+		return true, key, parsedBoolean
 	end
 
 	local okArray, parsedArray = parseStringArray(value)
