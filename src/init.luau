@@ -18,7 +18,7 @@ local Submodule = require("@self/modules/Submodule")
 local TomlParser = require("@self/modules/TomlParser")
 
 local function printUsage()
-	print("Usage: setup-project-configs [install|init] [options]")
+	print("Usage: sb-setup [install|init] [options]")
 	print("   or: lune run src/init [install|init] [options]")
 	print("")
 	print("Commands:")

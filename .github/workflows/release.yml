@@ -40,13 +40,13 @@ jobs:
       matrix:
         include:
           - target: linux-x86_64
-            binary_name: setup-project-configs
+            binary_name: sb-setup
           - target: windows-x86_64
-            binary_name: setup-project-configs.exe
+            binary_name: sb-setup.exe
           - target: macos-x86_64
-            binary_name: setup-project-configs
+            binary_name: sb-setup
           - target: macos-aarch64
-            binary_name: setup-project-configs
+            binary_name: sb-setup
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,23 +74,23 @@ jobs:
 
       - name: Package release bundle
         run: |
-          bundle_dir="dist/setup-project-configs-${{ matrix.target }}"
+          bundle_dir="dist/sb-setup-${{ matrix.target }}"
           mkdir -p "$bundle_dir"
           cp "build/${{ matrix.binary_name }}" "$bundle_dir/${{ matrix.binary_name }}"
           cp -R src/templates "$bundle_dir/templates"
           cp src/base_setup_project_configs.toml "$bundle_dir/base_setup_project_configs.toml"
           (
             cd dist
-            zip -qr "setup-project-configs-${{ matrix.target }}.zip" \
-              "setup-project-configs-${{ matrix.target }}"
+            zip -qr "sb-setup-${{ matrix.target }}.zip" \
+              "sb-setup-${{ matrix.target }}"
           )
 
       - name: Upload release asset
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v4
         with:
-          name: setup-project-configs-${{ matrix.target }}
-          path: dist/setup-project-configs-${{ matrix.target }}.zip
+          name: sb-setup-${{ matrix.target }}
+          path: dist/sb-setup-${{ matrix.target }}.zip
 
   publish:
     needs: build

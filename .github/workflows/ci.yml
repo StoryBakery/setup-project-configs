@@ -33,4 +33,4 @@ jobs:
         run: lune run scripts/BuildStandalone
 
       - name: Build standalone binary
-        run: lune build build/init.standalone.luau -o build/setup-project-configs
+        run: lune build build/init.standalone.luau -o build/sb-setup
