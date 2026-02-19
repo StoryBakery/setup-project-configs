@@ -1,0 +1,6 @@
+[[Scripts]]
+Name = "install-gitleaks"
+Type = "Lune"
+Script = "scripts/install_gitleaks.luau"
+Root = "Project"
+ScriptRoot = "Template"

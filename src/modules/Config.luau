@@ -9,6 +9,7 @@ local Config = {
 	TemplateConfigFileName = "template.toml",
 	TemplateSubmoduleFileName = "template.gitmodules",
 	TemplatePesdeFileName = "pesde-packages.toml",
+	TemplateGitignoreFileName = "template.gitignore",
 	TemplateScriptsFileName = "setup-scripts.toml",
 }
 

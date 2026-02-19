@@ -248,6 +248,10 @@ local INSTALL_ERROR_HANDLERS = {
 		local pathLabel = err.Path or "bakery_project_configs.toml"
 		print(`[Error] Invalid template source at index {err.Index} in "{pathLabel}".`)
 	end,
+	InvalidTemplateEnableScripts = function(err)
+		local pathLabel = err.Path or "bakery_project_configs.toml"
+		print(`[Error] Invalid template EnableScripts value at index {err.Index} in "{pathLabel}".`)
+	end,
 	InvalidTemplateOrder = function(err)
 		print(`[Error] Templates must start with "{err.BaseTemplateName}".`)
 	end,

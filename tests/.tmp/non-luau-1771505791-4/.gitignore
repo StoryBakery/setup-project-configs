@@ -1,0 +1,45 @@
+# BEGIN STORY BAKERY MANAGED BLOCK: sb.gitignore.base
+# Story Bakery default ignores
+
+# Rojo
+/sourcemap.json
+
+# Artifacts
+/*.lock
+/*.rbxl
+/*.rbxlx
+/*.rbxm
+/*.rbxmx
+
+# darklua
+/out
+/.darklua-sourcemap.json
+
+# Lune
+luau_packages/
+lune_packages/
+roblox_packages/
+
+# Pesde
+.pesde/
+
+# Wally
+/Packages
+/ServerPackages
+/DevPackages
+wally.lock
+
+# Node
+/node_modules
+
+# Build
+/build
+
+# Temp
+**/tmp
+**/.tmp
+
+# Misc
+.DS_Store
+.vscode
+# END STORY BAKERY MANAGED BLOCK: sb.gitignore.base

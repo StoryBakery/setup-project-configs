@@ -30,29 +30,25 @@ local function splitLines(text: string): { string }
 	return lines
 end
 
-local function parseMarker(line: string, marker: string): (string?, string?)
-	local tag = marker .. " STORY BAKERY MANAGED BLOCK:"
-	local startIndex = line:find(tag, 1, true)
-	if not startIndex then
+local function cleanupMarkerPayload(payload: string): string
+	local cleaned = trim(payload)
+	cleaned = cleaned:gsub("%s*-->%s*$", "")
+	cleaned = cleaned:gsub("%s*%*/%s*$", "")
+	return trim(cleaned)
+end
+
+local function parseManagedByMarkerPayload(payload: string): (string?, string?)
+	local blockId = payload:match("id%s*:%s*([^%s%]]+)")
+	if blockId == nil then
+		blockId = payload:match("id%s*=%s*([^%s%]]+)")
+	end
+	if blockId == nil then
 		return nil, nil
 	end
 
-	local rest = line:sub(startIndex + #tag)
-	rest = trim(rest)
-	rest = rest:gsub("%s*-->%s*$", "")
-	rest = rest:gsub("%s*%*/%s*$", "")
-	rest = trim(rest)
-
-	local blockId = rest
-	local mode = nil
-	local bracketStart = rest:find("%[")
-	if bracketStart then
-		local bracketEnd = rest:find("]", bracketStart, true)
-		if bracketEnd then
-			blockId = trim(rest:sub(1, bracketStart - 1))
-			local modePart = rest:sub(bracketStart + 1, bracketEnd - 1)
-			mode = modePart:match("mode%s*=%s*(%w+)")
-		end
+	local mode = payload:match("mode%s*:%s*([^%s%]]+)")
+	if mode == nil then
+		mode = payload:match("mode%s*=%s*([^%s%]]+)")
 	end
 
 	blockId = trim(blockId)
@@ -60,7 +56,25 @@ local function parseMarker(line: string, marker: string): (string?, string?)
 		return nil, nil
 	end
 
+	if mode ~= nil then
+		mode = trim(mode)
+		if mode == "" then
+			mode = nil
+		end
+	end
+
 	return blockId, mode
+end
+
+local function parseMarker(line: string, marker: string): (string?, string?)
+	local managedByTag = marker .. " managed-by:"
+	local startIndex = line:find(managedByTag, 1, true)
+	if startIndex then
+		local rest = cleanupMarkerPayload(line:sub(startIndex + #managedByTag))
+		return parseManagedByMarkerPayload(rest)
+	end
+
+	return nil, nil
 end
 
 local function parseBlocks(lines: { string })
@@ -177,6 +191,8 @@ local function merge(destinationText: string, templateInfo)
 			updates[blockId] = {
 				Action = "update",
 				Lines = mergedLines,
+				StartLine = templateBlock.StartLine,
+				EndLine = templateBlock.EndLine,
 			}
 		else
 			updates[blockId] = {
@@ -203,15 +219,19 @@ local function merge(destinationText: string, templateInfo)
 				index = block.EndIndex + 1
 			else
 				local contentLines = block.Lines
+				local startLine = block.StartLine
+				local endLine = block.EndLine
 				if update and update.Action == "update" then
 					contentLines = update.Lines
+					startLine = update.StartLine
+					endLine = update.EndLine
 				end
 
-				table.insert(mergedLines, block.StartLine)
+				table.insert(mergedLines, startLine)
 				for _, line in contentLines do
 					table.insert(mergedLines, line)
 				end
-				table.insert(mergedLines, block.EndLine)
+				table.insert(mergedLines, endLine)
 				index = block.EndIndex + 1
 			end
 		else

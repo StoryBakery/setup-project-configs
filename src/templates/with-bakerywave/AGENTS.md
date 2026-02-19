@@ -1,3 +1,3 @@
-<!-- BEGIN STORY BAKERY MANAGED BLOCK: sb.agents.extra [mode=append] -->
+<!-- BEGIN managed-by: sb-setup id: sb.agents.extra mode:append -->
 
-<!-- END STORY BAKERY MANAGED BLOCK: sb.agents.extra -->
+<!-- END managed-by: sb-setup id: sb.agents.extra -->

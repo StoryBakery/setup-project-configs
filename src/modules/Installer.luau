@@ -162,25 +162,45 @@ local function readProjectConfig(configPath: string, tomlParser)
 			if type(name) ~= "string" or name == "" then
 				return false, { Code = "InvalidTemplateEntry", Index = index, Path = configPath }
 			end
-			table.insert(templateRefs, { Name = name })
+			table.insert(templateRefs, { Name = name, EnableScripts = true })
 		end
 	elseif firstType == "table" then
 		for index, entry in templates do
-			if type(entry) ~= "table" then
-				return false, { Code = "InvalidTemplateEntry", Index = index, Path = configPath }
-			end
+			if type(entry) == "string" then
+				if entry == "" then
+					return false, { Code = "InvalidTemplateEntry", Index = index, Path = configPath }
+				end
+				table.insert(templateRefs, { Name = entry, EnableScripts = true })
+			else
+				if type(entry) ~= "table" then
+					return false, { Code = "InvalidTemplateEntry", Index = index, Path = configPath }
+				end
 
-			local name = entry.Name
-			if type(name) ~= "string" or name == "" then
-				return false, { Code = "InvalidTemplateEntry", Index = index, Path = configPath }
-			end
+				local name = entry.Name
+				if type(name) ~= "string" or name == "" then
+					return false, { Code = "InvalidTemplateEntry", Index = index, Path = configPath }
+				end
 
-			local source = entry.Source
-			if source ~= nil and (type(source) ~= "string" or source == "") then
-				return false, { Code = "InvalidTemplateSource", Index = index, Path = configPath }
-			end
+				local source = entry.Source
+				if source ~= nil and (type(source) ~= "string" or source == "") then
+					return false, { Code = "InvalidTemplateSource", Index = index, Path = configPath }
+				end
 
-			table.insert(templateRefs, { Name = name, Source = source })
+				local enableScripts = entry.EnableScripts
+				if enableScripts ~= nil and type(enableScripts) ~= "boolean" then
+					return false, { Code = "InvalidTemplateEnableScripts", Index = index, Path = configPath }
+				end
+
+				if enableScripts == nil then
+					enableScripts = true
+				end
+
+				table.insert(templateRefs, {
+					Name = name,
+					Source = source,
+					EnableScripts = enableScripts,
+				})
+			end
 		end
 	else
 		return false, { Code = "InvalidTemplateEntry", Index = 1, Path = configPath }
@@ -932,12 +952,20 @@ local function collectTemplateScripts(
 	return true, results
 end
 
+local function resolveDestinationPath(relativePath: string, templateGitignoreFileName: string): string
+	if relativePath == templateGitignoreFileName then
+		return ".gitignore"
+	end
+	return relativePath
+end
+
 local function applyTemplate(
 	templateRoot: string,
 	templateConfigFileName: string,
 	templateSubmoduleFileName: string,
 	templatePesdeFileName: string,
 	templateScriptsFileName: string,
+	templateGitignoreFileName: string,
 	scriptExcludeSet: { [string]: boolean },
 	fileSystemUtils,
 	managedBlock
@@ -960,7 +988,10 @@ local function applyTemplate(
 		end
 
 		local templateInfo = managedBlock.ParseTemplate(templateContent)
-		local destinationPath = item.RelativePath
+		local destinationPath = resolveDestinationPath(
+			item.RelativePath,
+			templateGitignoreFileName
+		)
 
 		if not templateInfo.HasBlocks or not FileSystem.isFile(destinationPath) then
 			fileSystemUtils.CopyFile(item.SourcePath, destinationPath)
@@ -1037,11 +1068,27 @@ local function install(config, fileSystemUtils, tomlParser, managedBlock)
 	local scripts: { [number]: { [string]: any } } = {}
 	local order = resolvedResult.Order
 	local infos = resolvedResult.Infos
+	local scriptsEnabledByTemplateName: { [string]: boolean } = {}
+
+	for _, templateRef in requestedTemplates do
+		local templateName = templateRef.Name
+		local enableScripts = templateRef.EnableScripts
+		if enableScripts == false then
+			scriptsEnabledByTemplateName[templateName] = false
+		elseif scriptsEnabledByTemplateName[templateName] == nil then
+			scriptsEnabledByTemplateName[templateName] = true
+		end
+	end
 
 	for orderIndex, templateName in order do
 		local templateInfo = infos[templateName]
 		if templateInfo == nil then
 			return false, { Code = "MissingTemplateInfo", TemplateName = templateName }
+		end
+
+		local scriptsEnabled = scriptsEnabledByTemplateName[templateName]
+		if scriptsEnabled == nil then
+			scriptsEnabled = true
 		end
 
 		local okScripts, scriptsResult = collectTemplateScripts(
@@ -1071,6 +1118,7 @@ local function install(config, fileSystemUtils, tomlParser, managedBlock)
 			config.TemplateSubmoduleFileName,
 			config.TemplatePesdeFileName,
 			config.TemplateScriptsFileName,
+			config.TemplateGitignoreFileName,
 			scriptExcludeSet,
 			fileSystemUtils,
 			managedBlock
@@ -1144,17 +1192,19 @@ local function install(config, fileSystemUtils, tomlParser, managedBlock)
 			end
 		end
 
-		for scriptIndex, script in scriptsResult do
-			script.TemplateName = templateName
-			script.TemplateRoot = templateInfo.Path
-			script.TemplateIndex = orderIndex
-			script.ScriptIndex = scriptIndex
-			if script.Order == nil then
-				script.SortOrder = orderIndex * 1000 + scriptIndex
-			else
-				script.SortOrder = script.Order
+		if scriptsEnabled then
+			for scriptIndex, script in scriptsResult do
+				script.TemplateName = templateName
+				script.TemplateRoot = templateInfo.Path
+				script.TemplateIndex = orderIndex
+				script.ScriptIndex = scriptIndex
+				if script.Order == nil then
+					script.SortOrder = orderIndex * 1000 + scriptIndex
+				else
+					script.SortOrder = script.Order
+				end
+				table.insert(scripts, script)
 			end
-			table.insert(scripts, script)
 		end
 
 		templateCounts[templateName] = countOrErr

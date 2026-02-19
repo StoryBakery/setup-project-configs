@@ -35,16 +35,65 @@ local function resolveRepoRoot(fileSystemUtils): string
 	return repoRoot
 end
 
-local function buildProjectConfigContent(templates: { string }): string
-	local quoted: { string } = {}
-	for _, name in templates do
-		table.insert(quoted, `"{name}"`)
+local function serializeTemplateEntry(entry): (boolean, string?)
+	if type(entry) == "string" then
+		if entry == "" then
+			return false, "Template name is empty."
+		end
+		return true, `"{entry}"`
 	end
-	return `Templates = [{table.concat(quoted, ", ")}]\n`
+
+	if type(entry) ~= "table" then
+		return false, "Template entry must be a string or table."
+	end
+
+	local name = entry.Name
+	if type(name) ~= "string" or name == "" then
+		return false, "Template entry Name is invalid."
+	end
+
+	local fields = { `Name = "{name}"` }
+	local source = entry.Source
+	if source ~= nil then
+		if type(source) ~= "string" or source == "" then
+			return false, "Template entry Source is invalid."
+		end
+		table.insert(fields, `Source = "{source}"`)
+	end
+
+	local enableScripts = entry.EnableScripts
+	if enableScripts ~= nil then
+		if type(enableScripts) ~= "boolean" then
+			return false, "Template entry EnableScripts is invalid."
+		end
+		local value = if enableScripts then "true" else "false"
+		table.insert(fields, `EnableScripts = {value}`)
+	end
+
+	return true, "{ " .. table.concat(fields, ", ") .. " }"
 end
 
-local function writeProjectConfig(path: string, templates: { string }, fileSystemUtils): boolean
-	local content = buildProjectConfigContent(templates)
+local function buildProjectConfigContent(templates: { [number]: any }): (boolean, string?)
+	local serialized: { string } = {}
+	for _, entry in templates do
+		local okSerialize, valueOrErr = serializeTemplateEntry(entry)
+		if not okSerialize then
+			return false, valueOrErr
+		end
+		table.insert(serialized, valueOrErr)
+	end
+	return true, `Templates = [{table.concat(serialized, ", ")}]\n`
+end
+
+local function writeProjectConfig(path: string, templates: { [number]: any }, fileSystemUtils): boolean
+	local okBuild, contentOrErr = buildProjectConfigContent(templates)
+	if not okBuild or contentOrErr == nil then
+		local detail = contentOrErr or "unknown"
+		print(`[Error] Failed to build config content: {detail}`)
+		return false
+	end
+
+	local content = contentOrErr
 	local okWrite, err = pcall(function()
 		FileSystem.writeFile(path, content)
 	end)
@@ -55,9 +104,33 @@ local function writeProjectConfig(path: string, templates: { string }, fileSyste
 	return true
 end
 
+local function buildTemplateLabel(templates: { [number]: any }): string
+	local labels: { string } = {}
+	for _, entry in templates do
+		if type(entry) == "string" then
+			table.insert(labels, entry)
+		elseif type(entry) == "table" then
+			local name = entry.Name
+			if type(name) == "string" and name ~= "" then
+				table.insert(labels, name)
+			else
+				table.insert(labels, "unknown")
+			end
+		else
+			table.insert(labels, "unknown")
+		end
+	end
+
+	if #labels == 0 then
+		return "none"
+	end
+
+	return table.concat(labels, ", ")
+end
+
 local function runTestCase(
 	caseName: string,
-	templates: { string },
+	templates: { [number]: any },
 	applyScriptPath: string,
 	tmpRoot: string,
 	index: number,
@@ -74,7 +147,7 @@ local function runTestCase(
 		return false
 	end
 
-	local templateLabel = table.concat(templates, ", ")
+	local templateLabel = buildTemplateLabel(templates)
 	print(`[Test] Running \"{caseName}\" with templates: {templateLabel}`)
 
 	local okExec, resultOrErr = pcall(
@@ -124,6 +197,14 @@ local testCases = {
 	{
 		Name = "base",
 		Templates = { "base" },
+	},
+	{
+		Name = "base-disable-scripts",
+		Templates = { { Name = "base", EnableScripts = false } },
+	},
+	{
+		Name = "base-disable-scripts-and-non-luau",
+		Templates = { { Name = "base", EnableScripts = false }, "non-luau" },
 	},
 	{
 		Name = "non-luau",

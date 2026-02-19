@@ -2,6 +2,7 @@
 	템플릿 설치를 테스트 환경에서 실행하는 스크립트입니다.
 ]]
 
+local FileSystem = require("@lune/fs")
 local Process = require("@lune/process")
 
 local Config = require("../src/modules/Config")
@@ -60,6 +61,20 @@ local function hasTemplate(templates, name: string): boolean
 	return false
 end
 
+local function isTemplateScriptsDisabled(templates, name: string): boolean
+	if type(templates) ~= "table" then
+		return false
+	end
+
+	for _, entry in templates do
+		if type(entry) == "table" and entry.Name == name and entry.EnableScripts == false then
+			return true
+		end
+	end
+
+	return false
+end
+
 local okConfig, configData = TomlParser.ReadFile(Config.ProjectConfigFileName)
 if not okConfig then
 	print("[Error] Missing bakery_project_configs.toml for test run.")
@@ -97,6 +112,25 @@ if hasTemplate(configData.Templates, "pesde-default-packages") then
 	end
 	print(`[Test] Setup scripts: {#scripts}`)
 end
+if hasTemplate(configData.Templates, "base") then
+	if not FileSystem.isFile(".gitignore") then
+		print("[Error] Expected .gitignore but it was not created.")
+		Process.exit(1)
+	end
+	if FileSystem.isFile("template.gitignore") then
+		print("[Error] template.gitignore should not be copied to project root.")
+		Process.exit(1)
+	end
+end
+
+if isTemplateScriptsDisabled(configData.Templates, "base")
+	and not hasTemplate(configData.Templates, "pesde-default-packages") then
+	if #scripts > 0 then
+		print("[Error] Expected setup scripts to be disabled for base template.")
+		Process.exit(1)
+	end
+end
+
 
 local submodules = installResult.Submodules or {}
 if hasTemplate(configData.Templates, "with-bakery-dev-handbook") then

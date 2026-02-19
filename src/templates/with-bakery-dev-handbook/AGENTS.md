@@ -1,4 +1,4 @@
-<!-- BEGIN STORY BAKERY MANAGED BLOCK: sb.agents.extra [mode=append] -->
+<!-- BEGIN managed-by: sb-setup id: sb.agents.extra mode:append -->
 # 가이드-무조건-준수
 이 레포지토리에서 코딩 작업을 할 때는 [frameworks](libs/bakery-dev-handbook/docs/frameworks) 폴더 내 내용을 **무조건** 준수해야합니다.
 
@@ -17,4 +17,4 @@
 문서에 정의된 스타일로만 코드를 작성해야합니다.
 
 특정 용어가 패키지의 문서나 문서에서 찾아 공부합니다.
-<!-- END STORY BAKERY MANAGED BLOCK: sb.agents.extra -->
+<!-- END managed-by: sb-setup id: sb.agents.extra -->
