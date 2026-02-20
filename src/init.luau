@@ -1,7 +1,7 @@
 --> 설정 파일과 서브모듈을 워크스페이스 루트에 설치하는 Lune 스크립트입니다.
 --[[
 	SetupConfigs
-	bakery_project_configs.toml 템플릿 목록을 워크스페이스 루트에 적용합니다.
+	sb_setup_configs.toml 템플릿 목록을 워크스페이스 루트에 적용합니다.
 	템플릿에서 정의한 서브모듈을 워크스페이스 루트에 설치합니다.
 ]]
 
@@ -11,23 +11,92 @@ local Stdio = require("@lune/stdio")
 
 local Config = require("@self/modules/Config")
 local FileSystemUtils = require("@self/modules/FileSystemUtils")
-local TemplateRoots = require("@self/modules/TemplateRoots")
 local Installer = require("@self/modules/Installer")
 local ManagedBlock = require("@self/modules/ManagedBlock")
 local Submodule = require("@self/modules/Submodule")
+local TemplateRoots = require("@self/modules/TemplateRoots")
 local TomlParser = require("@self/modules/TomlParser")
 
-local function printUsage()
-	print("Usage: sb-setup [install|init] [options]")
-	print("   or: lune run src/init [install|init] [options]")
+local function printGlobalUsage()
+	print("Usage: sb-setup <command> [options]")
+	print("   or: lune run src/init <command> [options]")
 	print("")
 	print("Commands:")
-	print("  install   Apply templates and submodules (default).")
-	print("  init      Create bakery_project_configs.toml.")
+	print("  install   Apply templates and submodules.")
+	print("  init      Create sb_setup_configs.toml.")
+	print("  config    Interactively update sb_setup_configs.toml.")
+	print("  list      Show available templates and descriptions.")
+	print("")
+	print("Global options:")
+	print("  -h, --help    Show help.")
+	print("")
+	print('Run "sb-setup <command> --help" for command details.')
+end
+
+local function printInstallUsage()
+	print("Usage: sb-setup install")
+	print("   or: lune run src/init install")
+	print("")
+	print("Apply templates, submodules, pesde packages, and setup scripts.")
+end
+
+local function printInitUsage()
+	print("Usage: sb-setup init [--force]")
+	print("   or: lune run src/init init [--force]")
+	print("")
+	print("Create sb_setup_configs.toml with interactive template selection.")
 	print("")
 	print("Options:")
-	print("  -h, --help    Show this help.")
-	print("  --force       Overwrite bakery_project_configs.toml when using init.")
+	print("  --force    Overwrite existing sb_setup_configs.toml.")
+end
+
+local function printConfigUsage()
+	print("Usage: sb-setup config")
+	print("   or: lune run src/init config")
+	print("")
+	print("Interactively edit templates in sb_setup_configs.toml.")
+end
+
+local function printListUsage()
+	print("Usage: sb-setup list")
+	print("   or: lune run src/init list")
+	print("")
+	print("Show available templates and descriptions.")
+end
+
+local function printUsageForCommand(commandName: string?)
+	if commandName == "install" then
+		printInstallUsage()
+	elseif commandName == "init" then
+		printInitUsage()
+	elseif commandName == "config" then
+		printConfigUsage()
+	elseif commandName == "list" then
+		printListUsage()
+	else
+		printGlobalUsage()
+	end
+end
+
+local function normalizeCommandName(commandName: string): string?
+	if commandName == "templates" then
+		return "list"
+	end
+
+	if commandName == "configure" then
+		return "config"
+	end
+
+	if
+		commandName == "install"
+		or commandName == "init"
+		or commandName == "config"
+		or commandName == "list"
+	then
+		return commandName
+	end
+
+	return nil
 end
 
 local function parseArgs(args: { string })
@@ -37,15 +106,17 @@ local function parseArgs(args: { string })
 	local errors: { string } = {}
 
 	for _, arg in args do
+		local normalizedCommand = normalizeCommandName(arg)
+
 		if arg == "-h" or arg == "--help" then
 			help = true
 		elseif arg == "--force" then
 			force = true
-		elseif arg == "install" or arg == "init" then
-			if commandName ~= nil and commandName ~= arg then
+		elseif normalizedCommand ~= nil then
+			if commandName ~= nil and commandName ~= normalizedCommand then
 				table.insert(errors, `Conflicting command "{arg}".`)
 			else
-				commandName = arg
+				commandName = normalizedCommand
 			end
 		elseif arg:sub(1, 1) == "-" then
 			table.insert(errors, `Unknown option "{arg}".`)
@@ -54,8 +125,12 @@ local function parseArgs(args: { string })
 		end
 	end
 
+	if force and commandName ~= "init" then
+		table.insert(errors, 'Option "--force" is only available for init.')
+	end
+
 	return {
-		Command = commandName or "install",
+		Command = commandName,
 		Force = force,
 		Help = help,
 		Errors = errors,
@@ -101,39 +176,196 @@ local function filterOptionalTemplates(
 	return optionalTemplates
 end
 
-local function selectOptionalTemplates(optionalTemplates: { string }): { string }
-	if #optionalTemplates == 0 then
-		return {}
-	end
-
-	print("[Init] Base template is always included.")
-	print("[Init] Optional templates:")
-	for index, name in optionalTemplates do
-		print(`[Init] {index}) {name}`)
-	end
-	print("[Init] Enter numbers separated by commas (empty for base only):")
-
-	local input = Stdio.readLine()
-	if input == nil or input == "" then
-		return {}
-	end
-
-	local selectedIndexSet: { [number]: boolean } = {}
-	for token in input:gmatch("[^,%s]+") do
-		local index = tonumber(token)
-		if index ~= nil and optionalTemplates[index] ~= nil then
-			selectedIndexSet[index] = true
-		end
-	end
-
+local function buildSelectedOptionalTemplates(
+	optionalTemplates: { string },
+	selectedNameSet: { [string]: boolean }
+): { string }
 	local selected: { string } = {}
-	for index, name in optionalTemplates do
-		if selectedIndexSet[index] then
+	for _, name in optionalTemplates do
+		if selectedNameSet[name] then
 			table.insert(selected, name)
 		end
 	end
-
 	return selected
+end
+
+local function formatTemplateNamesForPrint(templateNames: { string }): string
+	if #templateNames == 0 then
+		return "(none)"
+	end
+
+	return table.concat(templateNames, ", ")
+end
+
+local function printCurrentOptionalTemplateActivation(
+	optionalTemplates: { string },
+	selectedNameSet: { [string]: boolean }
+)
+	local enabledTemplates: { string } = {}
+	local disabledTemplates: { string } = {}
+
+	for _, name in optionalTemplates do
+		if selectedNameSet[name] then
+			table.insert(enabledTemplates, name)
+		else
+			table.insert(disabledTemplates, name)
+		end
+	end
+
+	print(`[Config] Current enabled templates: {formatTemplateNamesForPrint(enabledTemplates)}`)
+	print(`[Config] Current disabled templates: {formatTemplateNamesForPrint(disabledTemplates)}`)
+end
+
+local function buildSelectedOptionalNameSet(
+	optionalTemplates: { string },
+	currentTemplateNameSet: { [string]: boolean }?
+): { [string]: boolean }
+	local selectedNameSet: { [string]: boolean } = {}
+	if currentTemplateNameSet == nil then
+		return selectedNameSet
+	end
+
+	for _, name in optionalTemplates do
+		if currentTemplateNameSet[name] then
+			selectedNameSet[name] = true
+		end
+	end
+	return selectedNameSet
+end
+
+local function selectOptionalTemplatesFromLineInput(
+	optionalTemplates: { string },
+	currentTemplateNameSet: { [string]: boolean }?
+): (boolean, { string }?)
+	local selectedNameSet = buildSelectedOptionalNameSet(optionalTemplates, currentTemplateNameSet)
+
+	while true do
+		printCurrentOptionalTemplateActivation(optionalTemplates, selectedNameSet)
+		print("[Config] Templates:")
+		for index, name in optionalTemplates do
+			local statusLabel = if selectedNameSet[name] then "x" else " "
+			print(`[Config] {index}) [{statusLabel}] {name}`)
+		end
+		print('[Config] Enter numbers to toggle, "save" to apply, or "cancel" to cancel:')
+
+		local input = Stdio.readLine()
+		if input == nil then
+			return false, nil
+		end
+
+		local trimmedInput = input:match("^%s*(.-)%s*$")
+		local normalizedInput = trimmedInput:lower()
+		if normalizedInput == "save" then
+			return true, buildSelectedOptionalTemplates(optionalTemplates, selectedNameSet)
+		end
+		if normalizedInput == "cancel" then
+			return false, nil
+		end
+
+		for token in trimmedInput:gmatch("[^,%s]+") do
+			local index = tonumber(token)
+			if index ~= nil then
+				local name = optionalTemplates[index]
+				if name ~= nil then
+					selectedNameSet[name] = not selectedNameSet[name]
+				end
+			end
+		end
+	end
+end
+
+local function selectOptionalTemplatesWithSelectPrompt(
+	optionalTemplates: { string },
+	selectedNameSet: { [string]: boolean }
+): (boolean, { string }?, string?)
+	local lastIndex = 1
+
+	while true do
+		local choices: { string } = {}
+		for _, name in optionalTemplates do
+			local statusLabel = if selectedNameSet[name] then "[x]" else "[ ]"
+			table.insert(choices, `{statusLabel} {name}`)
+		end
+		table.insert(choices, "[Save]")
+		table.insert(choices, "[Cancel]")
+
+		local okPrompt, indexOrErr = pcall(function()
+			return Stdio.prompt(
+				"select",
+				"[Config] Move cursor and press Enter to toggle. Select Save to apply.",
+				choices,
+				lastIndex
+			)
+		end)
+		if not okPrompt then
+			local detail = tostring(indexOrErr):lower()
+			if detail:find("interrupt", 1, true) or detail:find("cancel", 1, true) then
+				return false, nil, "Cancelled"
+			end
+			if detail:find("argument", 1, true) or detail:find("parameter", 1, true) then
+				okPrompt, indexOrErr = pcall(function()
+					return Stdio.prompt(
+						"select",
+						"[Config] Move cursor and press Enter to toggle. Select Save to apply.",
+						choices
+					)
+				end)
+			end
+
+			if not okPrompt then
+				return false, nil, "Fallback"
+			end
+		end
+
+		local index = indexOrErr
+		if index == nil then
+			return false, nil, "Cancelled"
+		end
+
+		lastIndex = index
+
+		local saveIndex = #optionalTemplates + 1
+		local cancelIndex = #optionalTemplates + 2
+		if index == saveIndex then
+			return true, buildSelectedOptionalTemplates(optionalTemplates, selectedNameSet), nil
+		end
+		if index == cancelIndex then
+			return false, nil, "Cancelled"
+		end
+
+		local name = optionalTemplates[index]
+		if name ~= nil then
+			selectedNameSet[name] = not selectedNameSet[name]
+		end
+	end
+end
+
+local function selectOptionalTemplatesWithPrompt(
+	optionalTemplates: { string },
+	currentTemplateNameSet: { [string]: boolean }?
+): (boolean, { string }?, string?)
+	local selectedNameSet = buildSelectedOptionalNameSet(optionalTemplates, currentTemplateNameSet)
+	return selectOptionalTemplatesWithSelectPrompt(optionalTemplates, selectedNameSet)
+end
+
+local function selectOptionalTemplates(
+	optionalTemplates: { string },
+	currentTemplateNameSet: { [string]: boolean }?
+): (boolean, { string }?)
+	if #optionalTemplates == 0 then
+		return true, {}
+	end
+
+	local okPrompt, selectedTemplates, reason =
+		selectOptionalTemplatesWithPrompt(optionalTemplates, currentTemplateNameSet)
+	if okPrompt and selectedTemplates ~= nil then
+		return true, selectedTemplates
+	end
+	if reason == "Cancelled" then
+		return false, nil
+	end
+
+	return selectOptionalTemplatesFromLineInput(optionalTemplates, currentTemplateNameSet)
 end
 
 local function buildProjectConfigContent(templates: { string }): string
@@ -168,14 +400,19 @@ local function initProjectConfig(config, fileSystemUtils, forceInit: boolean)
 
 	local templateNames = collectTemplateOptions(config, fileSystemUtils)
 	local optionalTemplates = filterOptionalTemplates(templateNames, config.BaseTemplateName)
-	local selectedTemplates = selectOptionalTemplates(optionalTemplates)
-
-	local templates: { string } = { config.BaseTemplateName }
-	for _, name in selectedTemplates do
-		table.insert(templates, name)
+	local okSelect, selectedTemplates = selectOptionalTemplates(optionalTemplates)
+	if not okSelect or selectedTemplates == nil then
+		return false, { Code = "SelectionCancelled" }
 	end
 
-	local content = buildProjectConfigContent(templates)
+	local templatesForConfig: { string } = {}
+	local activeTemplates: { string } = { config.BaseTemplateName }
+	for _, name in selectedTemplates do
+		table.insert(templatesForConfig, name)
+		table.insert(activeTemplates, name)
+	end
+
+	local content = buildProjectConfigContent(templatesForConfig)
 	local okWrite, err = writeProjectConfig(projectConfigPath, content, fileSystemUtils)
 	if not okWrite then
 		return false, {
@@ -185,7 +422,83 @@ local function initProjectConfig(config, fileSystemUtils, forceInit: boolean)
 	end
 
 	local status = if hadExisting then "Overwritten" else "Created"
-	return true, { Status = status, Path = projectConfigPath }
+	return true, {
+		Status = status,
+		Path = projectConfigPath,
+		Templates = activeTemplates,
+	}
+end
+
+local function extractConfiguredTemplateNameSet(
+	configPath: string,
+	baseTemplateName: string
+): { [string]: boolean }
+	local templateNameSet: { [string]: boolean } = {}
+	templateNameSet[baseTemplateName] = true
+
+	local okRead, configData = TomlParser.ReadFile(configPath)
+	if not okRead then
+		return templateNameSet
+	end
+
+	local templates = configData.Templates
+	if type(templates) ~= "table" then
+		return templateNameSet
+	end
+
+	for _, entry in templates do
+		if type(entry) == "string" then
+			if entry ~= "" then
+				templateNameSet[entry] = true
+			end
+		elseif type(entry) == "table" then
+			local name = entry.Name
+			if type(name) == "string" and name ~= "" then
+				templateNameSet[name] = true
+			end
+		end
+	end
+
+	templateNameSet[baseTemplateName] = true
+	return templateNameSet
+end
+
+local function configureProjectConfig(config, fileSystemUtils)
+	local projectConfigPath = config.ProjectConfigFileName
+	local hadExisting = FileSystem.isFile(projectConfigPath)
+
+	local templateNames = collectTemplateOptions(config, fileSystemUtils)
+	local optionalTemplates = filterOptionalTemplates(templateNames, config.BaseTemplateName)
+	local configuredTemplateNameSet =
+		extractConfiguredTemplateNameSet(projectConfigPath, config.BaseTemplateName)
+	local okSelect, selectedTemplates =
+		selectOptionalTemplates(optionalTemplates, configuredTemplateNameSet)
+	if not okSelect or selectedTemplates == nil then
+		return false, { Code = "SelectionCancelled" }
+	end
+
+	local templatesForConfig: { string } = {}
+	local activeTemplates: { string } = { config.BaseTemplateName }
+	for _, name in selectedTemplates do
+		table.insert(templatesForConfig, name)
+		table.insert(activeTemplates, name)
+	end
+
+	local content = buildProjectConfigContent(templatesForConfig)
+	local okWrite, err = writeProjectConfig(projectConfigPath, content, fileSystemUtils)
+	if not okWrite then
+		return false, {
+			Code = "WriteProjectConfigFailed",
+			Detail = err or "",
+		}
+	end
+
+	local status = if hadExisting then "Updated" else "Created"
+	return true, {
+		Status = status,
+		Path = projectConfigPath,
+		Templates = activeTemplates,
+	}
 end
 
 local options = parseArgs(Process.args)
@@ -193,72 +506,113 @@ if #options.Errors > 0 then
 	for _, message in options.Errors do
 		print(`[Error] {message}`)
 	end
-	printUsage()
+	printUsageForCommand(options.Command)
 	Process.exit(1)
 end
 
 if options.Help then
-	printUsage()
+	printUsageForCommand(options.Command)
+	Process.exit(0)
+end
+
+if #Process.args == 0 then
+	printGlobalUsage()
 	Process.exit(0)
 end
 
 local optionName = options.Command
+if optionName == nil then
+	printGlobalUsage()
+	Process.exit(1)
+end
+
 if optionName == "init" then
 	local okInit, initResult = initProjectConfig(Config, FileSystemUtils, options.Force)
 	if not okInit then
-		if initResult.Code == "WriteProjectConfigFailed" then
-			print(`[Error] Failed to write bakery_project_configs.toml: {initResult.Detail}`)
+		if initResult.Code == "SelectionCancelled" then
+			print("[Info] Template selection cancelled. No changes were written.")
+			Process.exit(0)
+		elseif initResult.Code == "WriteProjectConfigFailed" then
+			print(`[Error] Failed to write sb_setup_configs.toml: {initResult.Detail}`)
 		else
-			print("[Error] Failed to initialize bakery_project_configs.toml.")
+			print("[Error] Failed to initialize sb_setup_configs.toml.")
 		end
 		Process.exit(1)
 	end
 
 	if initResult.Status == "Created" then
-		print(`[Init] bakery_project_configs.toml created at "{initResult.Path}".`)
+		print(`[Init] sb_setup_configs.toml created at "{initResult.Path}".`)
 	elseif initResult.Status == "Overwritten" then
-		print(`[Init] bakery_project_configs.toml overwritten at "{initResult.Path}".`)
+		print(`[Init] sb_setup_configs.toml overwritten at "{initResult.Path}".`)
 	else
-		print(`[Info] bakery_project_configs.toml already exists at "{initResult.Path}".`)
+		print(`[Info] sb_setup_configs.toml already exists at "{initResult.Path}".`)
+	end
+
+	if initResult.Templates ~= nil then
+		print(`[Init] Active templates: {formatTemplateNamesForPrint(initResult.Templates)}`)
+	end
+	Process.exit(0)
+end
+
+if optionName == "config" then
+	local okConfig, configResult = configureProjectConfig(Config, FileSystemUtils)
+	if not okConfig then
+		if configResult.Code == "SelectionCancelled" then
+			print("[Info] Template selection cancelled. No changes were written.")
+			Process.exit(0)
+		elseif configResult.Code == "WriteProjectConfigFailed" then
+			print(`[Error] Failed to write sb_setup_configs.toml: {configResult.Detail}`)
+		else
+			print("[Error] Failed to update sb_setup_configs.toml.")
+		end
+		Process.exit(1)
+	end
+
+	if configResult.Status == "Created" then
+		print(`[Config] sb_setup_configs.toml created at "{configResult.Path}".`)
+	else
+		print(`[Config] sb_setup_configs.toml updated at "{configResult.Path}".`)
+	end
+
+	if configResult.Templates ~= nil then
+		print(`[Config] Active templates: {formatTemplateNamesForPrint(configResult.Templates)}`)
 	end
 	Process.exit(0)
 end
 
 local INSTALL_ERROR_HANDLERS = {
 	MissingProjectConfig = function(err)
-		print(`[Error] Missing bakery_project_configs.toml at "{err.Path}".`)
+		print(`[Error] Missing sb_setup_configs.toml at "{err.Path}".`)
 	end,
 	ProjectConfigParseFailed = function(err)
-		local pathLabel = err.Path or "bakery_project_configs.toml"
+		local pathLabel = err.Path or "sb_setup_configs.toml"
 		print(`[Error] Failed to parse "{pathLabel}" at line {err.Line}.`)
 	end,
 	ProjectConfigReadFailed = function(err)
 		local detail = err.Detail or ""
-		print(`[Error] Failed to read bakery_project_configs.toml: {detail}`)
+		print(`[Error] Failed to read sb_setup_configs.toml: {detail}`)
 	end,
 	MissingTemplates = function(err)
-		local pathLabel = err.Path or "bakery_project_configs.toml"
+		local pathLabel = err.Path or "sb_setup_configs.toml"
 		print(`[Error] Templates list is empty in "{pathLabel}".`)
 	end,
 	InvalidTemplateEntry = function(err)
-		local pathLabel = err.Path or "bakery_project_configs.toml"
+		local pathLabel = err.Path or "sb_setup_configs.toml"
 		print(`[Error] Invalid template entry at index {err.Index} in "{pathLabel}".`)
 	end,
 	InvalidTemplateSource = function(err)
-		local pathLabel = err.Path or "bakery_project_configs.toml"
+		local pathLabel = err.Path or "sb_setup_configs.toml"
 		print(`[Error] Invalid template source at index {err.Index} in "{pathLabel}".`)
 	end,
 	InvalidTemplateEnableScripts = function(err)
-		local pathLabel = err.Path or "bakery_project_configs.toml"
+		local pathLabel = err.Path or "sb_setup_configs.toml"
 		print(`[Error] Invalid template EnableScripts value at index {err.Index} in "{pathLabel}".`)
 	end,
 	InvalidTemplateOrder = function(err)
 		print(`[Error] Templates must start with "{err.BaseTemplateName}".`)
 	end,
 	MissingTemplateSource = function(err)
-		print(
-			`[Error] Template source not found for "{err.TemplateName}": {err.Source}`
-		)
+		print(`[Error] Template source not found for "{err.TemplateName}": {err.Source}`)
 	end,
 	DuplicateTemplateSource = function(err)
 		print(`[Error] Template "{err.TemplateName}" has multiple sources.`)
@@ -287,9 +641,7 @@ local INSTALL_ERROR_HANDLERS = {
 		print(`[Error] Missing Name in template.toml at "{err.Path}".`)
 	end,
 	TemplateNameMismatch = function(err)
-		print(
-			`[Error] Template name mismatch for "{err.TemplateName}" (found "{err.ConfigName}").`
-		)
+		print(`[Error] Template name mismatch for "{err.TemplateName}" (found "{err.ConfigName}").`)
 	end,
 	ReadTemplateFailed = function(err)
 		print(`[Error] Failed to read template file "{err.Path}".`)
@@ -337,18 +689,14 @@ local INSTALL_ERROR_HANDLERS = {
 				`[Error] Failed to parse template pesde file "{pathLabel}" at line {lineLabel}: {lineText}`
 			)
 		else
-			print(
-				`[Error] Failed to parse template pesde file "{pathLabel}" at line {lineLabel}.`
-			)
+			print(`[Error] Failed to parse template pesde file "{pathLabel}" at line {lineLabel}.`)
 		end
 	end,
 	InvalidTemplatePesde = function(err)
 		print(`[Error] Invalid template pesde file "{err.Path}".`)
 	end,
 	InvalidTemplatePesdeEntry = function(err)
-		print(
-			`[Error] Invalid template pesde entry at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Invalid template pesde entry at index {err.Index} in "{err.Path}".`)
 	end,
 	TemplateScriptsReadFailed = function(err)
 		local detail = err.Detail or ""
@@ -363,23 +711,17 @@ local INSTALL_ERROR_HANDLERS = {
 				`[Error] Failed to parse setup scripts file "{pathLabel}" at line {lineLabel}: {lineText}`
 			)
 		else
-			print(
-				`[Error] Failed to parse setup scripts file "{pathLabel}" at line {lineLabel}.`
-			)
+			print(`[Error] Failed to parse setup scripts file "{pathLabel}" at line {lineLabel}.`)
 		end
 	end,
 	InvalidTemplateScripts = function(err)
 		print(`[Error] Invalid setup scripts file "{err.Path}".`)
 	end,
 	InvalidTemplateScriptEntry = function(err)
-		print(
-			`[Error] Invalid setup script entry at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Invalid setup script entry at index {err.Index} in "{err.Path}".`)
 	end,
 	MissingTemplateScriptType = function(err)
-		print(
-			`[Error] Missing setup script type at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Missing setup script type at index {err.Index} in "{err.Path}".`)
 	end,
 	InvalidTemplateScriptType = function(err)
 		local typeLabel = err.Type or "unknown"
@@ -388,24 +730,16 @@ local INSTALL_ERROR_HANDLERS = {
 		)
 	end,
 	MissingTemplateScriptCommand = function(err)
-		print(
-			`[Error] Missing setup script command at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Missing setup script command at index {err.Index} in "{err.Path}".`)
 	end,
 	MissingTemplateScriptPath = function(err)
-		print(
-			`[Error] Missing setup script path at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Missing setup script path at index {err.Index} in "{err.Path}".`)
 	end,
 	InvalidTemplateScriptArgs = function(err)
-		print(
-			`[Error] Invalid setup script args at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Invalid setup script args at index {err.Index} in "{err.Path}".`)
 	end,
 	InvalidTemplateScriptArg = function(err)
-		print(
-			`[Error] Invalid setup script arg at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Invalid setup script arg at index {err.Index} in "{err.Path}".`)
 	end,
 	InvalidTemplateScriptRoot = function(err)
 		local rootLabel = err.Root or "unknown"
@@ -414,19 +748,13 @@ local INSTALL_ERROR_HANDLERS = {
 		)
 	end,
 	InvalidTemplateScriptOrder = function(err)
-		print(
-			`[Error] Invalid setup script order at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Invalid setup script order at index {err.Index} in "{err.Path}".`)
 	end,
 	InvalidTemplateScriptName = function(err)
-		print(
-			`[Error] Invalid setup script name at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Invalid setup script name at index {err.Index} in "{err.Path}".`)
 	end,
 	InvalidTemplateScriptCwd = function(err)
-		print(
-			`[Error] Invalid setup script cwd at index {err.Index} in "{err.Path}".`
-		)
+		print(`[Error] Invalid setup script cwd at index {err.Index} in "{err.Path}".`)
 	end,
 }
 
@@ -470,12 +798,8 @@ local function addPesdePackage(packageEntry, configRoot: string): (boolean, stri
 		end
 	end
 
-	local okExec, resultOrErr = pcall(
-		Process.exec,
-		"pesde",
-		args,
-		{ capture = true, cwd = configRoot }
-	)
+	local okExec, resultOrErr =
+		pcall(Process.exec, "pesde", args, { capture = true, cwd = configRoot })
 	if not okExec then
 		return false, tostring(resultOrErr)
 	end
@@ -510,11 +834,7 @@ local function resolveScriptPathRoot(script, configRoot, fileSystemUtils): strin
 	return configRoot
 end
 
-local function resolveScriptPath(
-	scriptPath: string,
-	rootPath: string,
-	fileSystemUtils
-): string
+local function resolveScriptPath(scriptPath: string, rootPath: string, fileSystemUtils): string
 	if TemplateRoots.IsAbsolutePath(scriptPath) then
 		return scriptPath
 	end
@@ -554,6 +874,49 @@ local function resolveScriptCwd(script, configRoot, fileSystemUtils): string
 	return fileSystemUtils.JoinPath(rootPath, cwd)
 end
 
+local function printTemplateList(listResult)
+	local templates = listResult.Templates or {}
+	print(`[Template] Available templates: {#templates}`)
+	for _, templateInfo in templates do
+		local templateName = templateInfo.Name or "unknown"
+		local description = templateInfo.Description
+		if description == nil or description == "" then
+			description = "No description."
+		end
+
+		local extends = templateInfo.Extends
+		local extendsLabel = "none"
+		if type(extends) == "table" and #extends > 0 then
+			extendsLabel = table.concat(extends, ", ")
+		end
+
+		local sourceLabel = templateInfo.Source or "unknown"
+		local pathLabel = templateInfo.Path or ""
+
+		print(`[Template] {templateName}`)
+		print(`  Description: {description}`)
+		print(`  Extends: {extendsLabel}`)
+		print(`  Source: {sourceLabel}`)
+		print(`  Path: {pathLabel}`)
+	end
+
+	local roots = listResult.TemplateRoots or {}
+	if #roots > 0 then
+		print(`[Template] Roots: {table.concat(roots, ", ")}`)
+	end
+end
+
+if optionName == "list" then
+	local okList, listResult = Installer.ListTemplates(Config, FileSystemUtils, TomlParser)
+	if not okList then
+		printInstallError(listResult)
+		Process.exit(1)
+	end
+
+	printTemplateList(listResult)
+	Process.exit(0)
+end
+
 local okInstall, installResult =
 	Installer.Install(Config, FileSystemUtils, TomlParser, ManagedBlock)
 if not okInstall then
@@ -568,8 +931,7 @@ if #templateNames > 0 then
 end
 print(`[Install] Templates applied: {templateLabel} (files {installResult.TotalCount})`)
 
-local configRoot =
-	TemplateRoots.ResolveConfigRoot(Config.ProjectConfigFileName, FileSystemUtils)
+local configRoot = TemplateRoots.ResolveConfigRoot(Config.ProjectConfigFileName, FileSystemUtils)
 local submodules = installResult.Submodules or {}
 for _, submodule in submodules do
 	local submodulePath = submodule.Path
@@ -658,12 +1020,7 @@ for _, script in scripts do
 
 	local command, args = buildScriptCommand(script, configRoot, FileSystemUtils)
 	local cwd = resolveScriptCwd(script, configRoot, FileSystemUtils)
-	local okExec, resultOrErr = pcall(
-		Process.exec,
-		command,
-		args,
-		{ capture = true, cwd = cwd }
-	)
+	local okExec, resultOrErr = pcall(Process.exec, command, args, { capture = true, cwd = cwd })
 	if not okExec then
 		print(`[Error] Script failed to execute "{displayName}": {tostring(resultOrErr)}`)
 		Process.exit(1)

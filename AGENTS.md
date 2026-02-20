@@ -98,3 +98,5 @@ CI 파이프라인에서도 위와 동일한 명령을 동일한 순서로 실�
 
 특정 용어가 패키지의 문서나 문서에서 찾아 공부합니다.
 <!-- END STORY BAKERY MANAGED BLOCK: sb.agents.extra -->
+<!-- BEGIN managed-by: sb-setup id: sb.agents.extra -->
+<!-- END managed-by: sb-setup id: sb.agents.extra -->

@@ -6,6 +6,7 @@ local FileSystem = require("@lune/fs")
 local Process = require("@lune/process")
 
 local FileSystemUtils = require("../src/modules/FileSystemUtils")
+local TomlParser = require("../src/modules/TomlParser")
 
 local function normalizeSourcePath(source: string): string
 	local normalized = source
@@ -33,6 +34,43 @@ local function resolveRepoRoot(fileSystemUtils): string
 	end
 
 	return repoRoot
+end
+
+local function removeDirectoryRecursive(path: string, fileSystemUtils): boolean
+	if not FileSystem.isDir(path) then
+		return true
+	end
+
+	local okRead, entriesOrErr = pcall(FileSystem.readDir, path)
+	if not okRead or entriesOrErr == nil then
+		local detail = tostring(entriesOrErr)
+		print(`[Error] Failed to read directory "{path}": {detail}`)
+		return false
+	end
+
+	for _, entryName in entriesOrErr do
+		local entryPath = fileSystemUtils.JoinPath(path, entryName)
+		if FileSystem.isDir(entryPath) then
+			local okRemoveChild = removeDirectoryRecursive(entryPath, fileSystemUtils)
+			if not okRemoveChild then
+				return false
+			end
+		else
+			local okRemoveFile, err = pcall(FileSystem.removeFile, entryPath)
+			if not okRemoveFile then
+				print(`[Error] Failed to remove file "{entryPath}": {tostring(err)}`)
+				return false
+			end
+		end
+	end
+
+	local okRemoveDir, err = pcall(FileSystem.removeDir, path)
+	if not okRemoveDir then
+		print(`[Error] Failed to remove directory "{path}": {tostring(err)}`)
+		return false
+	end
+
+	return true
 end
 
 local function serializeTemplateEntry(entry): (boolean, string?)
@@ -128,6 +166,73 @@ local function buildTemplateLabel(templates: { [number]: any }): string
 	return table.concat(labels, ", ")
 end
 
+local function countTemplateNames(templateNameSet: { [string]: boolean }): number
+	local count = 0
+	for _ in templateNameSet do
+		count += 1
+	end
+	return count
+end
+
+local function buildTemplateNameSet(templateNames: { string }): { [string]: boolean }
+	local templateNameSet: { [string]: boolean } = {}
+	for _, name in templateNames do
+		templateNameSet[name] = true
+	end
+	return templateNameSet
+end
+
+local function hasSameTemplateNames(actualTemplates: { string }, expectedTemplates: { string }): boolean
+	local actualTemplateNameSet = buildTemplateNameSet(actualTemplates)
+	local expectedTemplateNameSet = buildTemplateNameSet(expectedTemplates)
+
+	local actualCount = countTemplateNames(actualTemplateNameSet)
+	local expectedCount = countTemplateNames(expectedTemplateNameSet)
+	if actualCount ~= expectedCount then
+		return false
+	end
+
+	for name in expectedTemplateNameSet do
+		if not actualTemplateNameSet[name] then
+			return false
+		end
+	end
+
+	return true
+end
+
+local function readConfiguredTemplateNames(configPath: string): (boolean, { string }?)
+	local okRead, configDataOrErr = TomlParser.ReadFile(configPath)
+	if not okRead then
+		local code = configDataOrErr.Code or "unknown"
+		local detail = configDataOrErr.Detail or ""
+		print(`[Error] Failed to read config "{configPath}" ({code}): {detail}`)
+		return false, nil
+	end
+
+	local templates = configDataOrErr.Templates
+	if type(templates) ~= "table" then
+		print(`[Error] Templates field is missing in "{configPath}".`)
+		return false, nil
+	end
+
+	local templateNames: { string } = {}
+	for _, entry in templates do
+		if type(entry) == "string" then
+			if entry ~= "" then
+				table.insert(templateNames, entry)
+			end
+		elseif type(entry) == "table" then
+			local name = entry.Name
+			if type(name) == "string" and name ~= "" then
+				table.insert(templateNames, name)
+			end
+		end
+	end
+
+	return true, templateNames
+end
+
 local function runTestCase(
 	caseName: string,
 	templates: { [number]: any },
@@ -141,7 +246,7 @@ local function runTestCase(
 	local caseRoot = fileSystemUtils.JoinPath(tmpRoot, caseDirName)
 	fileSystemUtils.MakeDirectoryRecursive(caseRoot)
 
-	local configPath = fileSystemUtils.JoinPath(caseRoot, "bakery_project_configs.toml")
+	local configPath = fileSystemUtils.JoinPath(caseRoot, "sb_setup_configs.toml")
 	local okWrite = writeProjectConfig(configPath, templates, fileSystemUtils)
 	if not okWrite then
 		return false
@@ -179,12 +284,98 @@ local function runTestCase(
 		print(result.stdout)
 	end
 
+	local okCleanup = removeDirectoryRecursive(caseRoot, fileSystemUtils)
+	if not okCleanup then
+		return false
+	end
+
+	return true
+end
+
+local function runConfigCommandTestCase(
+	caseName: string,
+	initialTemplates: { [number]: any },
+	input: string,
+	expectedTemplates: { string },
+	initScriptPath: string,
+	tmpRoot: string,
+	index: number,
+	fileSystemUtils
+): boolean
+	local runId = tostring(os.time()) .. "-config-" .. tostring(index)
+	local caseDirName = caseName .. "-" .. runId
+	local caseRoot = fileSystemUtils.JoinPath(tmpRoot, caseDirName)
+	fileSystemUtils.MakeDirectoryRecursive(caseRoot)
+
+	local configPath = fileSystemUtils.JoinPath(caseRoot, "sb_setup_configs.toml")
+	local okWrite = writeProjectConfig(configPath, initialTemplates, fileSystemUtils)
+	if not okWrite then
+		return false
+	end
+
+	print(`[Test] Running "{caseName}" config command test.`)
+
+	local okExec, resultOrErr = pcall(
+		Process.exec,
+		"lune",
+		{ "run", initScriptPath, "config" },
+		{
+			capture = true,
+			cwd = caseRoot,
+			stdio = { stdin = input },
+		}
+	)
+	if not okExec then
+		print(`[Test] Failed to run config command: {tostring(resultOrErr)}`)
+		return false
+	end
+
+	local result = resultOrErr
+	if not result.ok then
+		local stdout = result.stdout or ""
+		local stderr = result.stderr or ""
+		print(`[Test] Config case "{caseName}" failed.`)
+		if stdout ~= "" then
+			print(`[Test] stdout: {stdout}`)
+		end
+		if stderr ~= "" then
+			print(`[Test] stderr: {stderr}`)
+		end
+		return false
+	end
+
+	local okRead, configuredTemplates = readConfiguredTemplateNames(configPath)
+	if not okRead or configuredTemplates == nil then
+		return false
+	end
+
+	local hasSame = hasSameTemplateNames(configuredTemplates, expectedTemplates)
+	if not hasSame then
+		local expectedLabel = table.concat(expectedTemplates, ", ")
+		local actualLabel = table.concat(configuredTemplates, ", ")
+		print(`[Test] Config case "{caseName}" template mismatch.`)
+		print(`[Test] expected: {expectedLabel}`)
+		print(`[Test] actual: {actualLabel}`)
+		return false
+	end
+
+	local okCleanup = removeDirectoryRecursive(caseRoot, fileSystemUtils)
+	if not okCleanup then
+		return false
+	end
+
 	return true
 end
 
 local repoRoot = resolveRepoRoot(FileSystemUtils)
 local testsRoot = FileSystemUtils.JoinPath(repoRoot, "tests")
 local tmpRoot = FileSystemUtils.JoinPath(testsRoot, ".tmp")
+if FileSystem.isDir(tmpRoot) then
+	local okCleanup = removeDirectoryRecursive(tmpRoot, FileSystemUtils)
+	if not okCleanup then
+		Process.exit(1)
+	end
+end
 FileSystemUtils.MakeDirectoryRecursive(tmpRoot)
 
 local applyScriptPath = FileSystemUtils.JoinPath(testsRoot, "ApplyTemplates.luau")
@@ -193,10 +384,16 @@ if not FileSystem.isFile(applyScriptPath) then
 	Process.exit(1)
 end
 
+local initScriptPath = FileSystemUtils.JoinPath(repoRoot, "src/init.luau")
+if not FileSystem.isFile(initScriptPath) then
+	print(`[Error] Missing init script at "{initScriptPath}".`)
+	Process.exit(1)
+end
+
 local testCases = {
 	{
 		Name = "base",
-		Templates = { "base" },
+		Templates = {},
 	},
 	{
 		Name = "base-disable-scripts",
@@ -208,36 +405,35 @@ local testCases = {
 	},
 	{
 		Name = "non-luau",
-		Templates = { "base", "non-luau" },
+		Templates = { "non-luau" },
 	},
 	{
 		Name = "roblox-place",
-		Templates = { "base", "roblox-place" },
+		Templates = { "roblox-place" },
 	},
 	{
 		Name = "with-bakerywave",
-		Templates = { "base", "with-bakerywave" },
+		Templates = { "with-bakerywave" },
 	},
 	{
 		Name = "with-bakery-dev-handbook",
-		Templates = { "base", "with-bakery-dev-handbook" },
+		Templates = { "with-bakery-dev-handbook" },
 	},
 	{
 		Name = "pesde-default-packages",
-		Templates = { "base", "pesde-default-packages" },
+		Templates = { "pesde-default-packages" },
 	},
 	{
 		Name = "bakerywave-and-handbook",
-		Templates = { "base", "with-bakerywave", "with-bakery-dev-handbook" },
+		Templates = { "with-bakerywave", "with-bakery-dev-handbook" },
 	},
 	{
 		Name = "bakerywave-and-pesde",
-		Templates = { "base", "with-bakerywave", "pesde-default-packages" },
+		Templates = { "with-bakerywave", "pesde-default-packages" },
 	},
 	{
 		Name = "all-templates",
 		Templates = {
-			"base",
 			"non-luau",
 			"roblox-place",
 			"with-bakerywave",
@@ -253,6 +449,37 @@ for index, case in testCases do
 		case.Name,
 		case.Templates,
 		applyScriptPath,
+		tmpRoot,
+		index,
+		FileSystemUtils
+	)
+	if not ok then
+		failed += 1
+	end
+end
+
+local configCommandTestCases = {
+	{
+		Name = "config-toggle-non-luau",
+		InitialTemplates = { "pesde-default-packages" },
+		Input = "1\nsave\n",
+		ExpectedTemplates = { "non-luau", "pesde-default-packages" },
+	},
+	{
+		Name = "config-cancel",
+		InitialTemplates = { "with-bakerywave" },
+		Input = "cancel\n",
+		ExpectedTemplates = { "with-bakerywave" },
+	},
+}
+
+for index, case in configCommandTestCases do
+	local ok = runConfigCommandTestCase(
+		case.Name,
+		case.InitialTemplates,
+		case.Input,
+		case.ExpectedTemplates,
+		initScriptPath,
 		tmpRoot,
 		index,
 		FileSystemUtils

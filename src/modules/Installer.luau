@@ -57,6 +57,15 @@ local function normalizePath(path: string): string
 	return path:gsub("\\", "/")
 end
 
+local function isPathInsideRoot(path: string, root: string): boolean
+	local normalizedPath = normalizePath(path):gsub("/+$", "")
+	local normalizedRoot = normalizePath(root):gsub("/+$", "")
+	if normalizedPath == normalizedRoot then
+		return true
+	end
+	return normalizedPath:sub(1, #normalizedRoot + 1) == normalizedRoot .. "/"
+end
+
 local function normalizeSubmoduleRootPath(value: any): string?
 	if type(value) ~= "string" or value == "" then
 		return nil
@@ -149,11 +158,20 @@ local function readProjectConfig(configPath: string, tomlParser)
 	end
 
 	local templates = result.Templates
-	if type(templates) ~= "table" or #templates == 0 then
+	if type(templates) ~= "table" then
 		return false, { Code = "MissingTemplates", Path = configPath }
 	end
 
 	local templateRefs: { [number]: { [string]: any } } = {}
+	if #templates == 0 then
+		return true, {
+			Templates = templateRefs,
+			SubmoduleRootPath = if type(result.SubmoduleRootPath) == "string" and result.SubmoduleRootPath ~= ""
+				then result.SubmoduleRootPath
+				else nil,
+		}
+	end
+
 	local firstEntry = templates[1]
 	local firstType = type(firstEntry)
 
@@ -215,6 +233,39 @@ local function readProjectConfig(configPath: string, tomlParser)
 		Templates = templateRefs,
 		SubmoduleRootPath = submoduleRootPath,
 	}
+end
+
+local function normalizeRequestedTemplates(
+	requestedTemplates: { [number]: { [string]: any } },
+	baseTemplateName: string
+): { [number]: { [string]: any } }
+	local normalizedTemplates: { [number]: { [string]: any } } = {}
+	local baseTemplateRef = nil
+
+	for _, templateRef in requestedTemplates do
+		if templateRef.Name == baseTemplateName then
+			if baseTemplateRef == nil then
+				baseTemplateRef = templateRef
+			end
+		end
+	end
+
+	if baseTemplateRef == nil then
+		baseTemplateRef = {
+			Name = baseTemplateName,
+			EnableScripts = true,
+		}
+	end
+
+	table.insert(normalizedTemplates, baseTemplateRef)
+
+	for _, templateRef in requestedTemplates do
+		if templateRef.Name ~= baseTemplateName then
+			table.insert(normalizedTemplates, templateRef)
+		end
+	end
+
+	return normalizedTemplates
 end
 
 local function loadTemplateConfig(
@@ -315,9 +366,15 @@ local function loadTemplateConfig(
 		extends = {}
 	end
 
+	local description = result.Description
+	if type(description) ~= "string" then
+		description = ""
+	end
+
 	return true, {
 		Name = name,
 		Extends = extends,
+		Description = description,
 		Path = templateRoot,
 	}
 end
@@ -1014,25 +1071,33 @@ local function applyTemplate(
 	return true, appliedCount
 end
 
-local function install(config, fileSystemUtils, tomlParser, managedBlock)
+local function install(config, fileSystemUtils, tomlParser, managedBlock, installOptions)
 	local projectConfigPath = config.ProjectConfigFileName
 	local configRoot = TemplateRoots.ResolveConfigRoot(projectConfigPath, fileSystemUtils)
-	local okProject, projectResult = readProjectConfig(projectConfigPath, tomlParser)
-	if not okProject then
-		return false, projectResult
+
+	local requestedTemplates = nil
+	local submoduleRootPath = nil
+	if installOptions ~= nil and type(installOptions.RequestedTemplates) == "table" then
+		requestedTemplates = installOptions.RequestedTemplates
+		submoduleRootPath = resolveSubmoduleRootPath(installOptions.SubmoduleRootPath, configRoot)
+	else
+		local okProject, projectResult = readProjectConfig(projectConfigPath, tomlParser)
+		if not okProject then
+			return false, projectResult
+		end
+
+		requestedTemplates = projectResult.Templates
+		submoduleRootPath = resolveSubmoduleRootPath(
+			projectResult.SubmoduleRootPath,
+			configRoot
+		)
 	end
 
-	local requestedTemplates = projectResult.Templates
-	local submoduleRootPath = resolveSubmoduleRootPath(
-		projectResult.SubmoduleRootPath,
-		configRoot
-	)
-	if requestedTemplates[1].Name ~= config.BaseTemplateName then
-		return false, {
-			Code = "InvalidTemplateOrder",
-			BaseTemplateName = config.BaseTemplateName,
-		}
+	if type(requestedTemplates) ~= "table" then
+		return false, { Code = "MissingTemplates", Path = projectConfigPath }
 	end
+
+	requestedTemplates = normalizeRequestedTemplates(requestedTemplates, config.BaseTemplateName)
 
 	local packageTemplatesRoot = TemplateRoots.ResolvePackageTemplatesRoot(
 		config.TemplatesRootName,
@@ -1233,8 +1298,71 @@ local function install(config, fileSystemUtils, tomlParser, managedBlock)
 	}
 end
 
+local function listTemplates(config, fileSystemUtils, tomlParser)
+	local projectConfigPath = config.ProjectConfigFileName
+	local configRoot = TemplateRoots.ResolveConfigRoot(projectConfigPath, fileSystemUtils)
+
+	local packageTemplatesRoot = TemplateRoots.ResolvePackageTemplatesRoot(
+		config.TemplatesRootName,
+		configRoot,
+		fileSystemUtils
+	)
+	local projectTemplatesRoot = TemplateRoots.ResolveProjectTemplatesRoot(
+		configRoot,
+		config.TemplatesRootName,
+		fileSystemUtils
+	)
+	local hasProjectTemplatesRoot = FileSystem.isDir(projectTemplatesRoot)
+
+	local roots: { string } = {}
+	if hasProjectTemplatesRoot then
+		table.insert(roots, projectTemplatesRoot)
+	end
+	if packageTemplatesRoot ~= nil then
+		table.insert(roots, packageTemplatesRoot)
+	end
+
+	local names = TemplateRoots.ListTemplateNames(roots, fileSystemUtils)
+	local templates: { [number]: { [string]: any } } = {}
+
+	for _, name in names do
+		local okTemplate, templateInfo = loadTemplateConfig(
+			name,
+			nil,
+			configRoot,
+			if hasProjectTemplatesRoot then projectTemplatesRoot else nil,
+			packageTemplatesRoot,
+			config.TemplateConfigFileName,
+			tomlParser,
+			fileSystemUtils
+		)
+		if not okTemplate then
+			return false, templateInfo
+		end
+
+		local sourceLabel = "package"
+		if hasProjectTemplatesRoot and isPathInsideRoot(templateInfo.Path, projectTemplatesRoot) then
+			sourceLabel = "project"
+		end
+
+		table.insert(templates, {
+			Name = templateInfo.Name,
+			Description = templateInfo.Description,
+			Extends = templateInfo.Extends,
+			Path = templateInfo.Path,
+			Source = sourceLabel,
+		})
+	end
+
+	return true, {
+		Templates = templates,
+		TemplateRoots = roots,
+	}
+end
+
 local Installer = {
 	Install = install,
+	ListTemplates = listTemplates,
 }
 
 return Installer

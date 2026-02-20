@@ -75,9 +75,19 @@ local function isTemplateScriptsDisabled(templates, name: string): boolean
 	return false
 end
 
+local function hasTemplateName(templateNames: { string }, name: string): boolean
+	for _, templateName in templateNames do
+		if templateName == name then
+			return true
+		end
+	end
+
+	return false
+end
+
 local okConfig, configData = TomlParser.ReadFile(Config.ProjectConfigFileName)
 if not okConfig then
-	print("[Error] Missing bakery_project_configs.toml for test run.")
+	print("[Error] Missing sb_setup_configs.toml for test run.")
 	Process.exit(1)
 end
 
@@ -94,6 +104,11 @@ if #templateNames > 0 then
 	templateLabel = table.concat(templateNames, ", ")
 end
 print(`[Test] Templates applied: {templateLabel}`)
+
+if not hasTemplateName(templateNames, "base") then
+	print('[Error] Expected base template to be applied automatically.')
+	Process.exit(1)
+end
 
 local pesdePackages = installResult.PesdePackages or {}
 if hasTemplate(configData.Templates, "pesde-default-packages") then
@@ -112,15 +127,13 @@ if hasTemplate(configData.Templates, "pesde-default-packages") then
 	end
 	print(`[Test] Setup scripts: {#scripts}`)
 end
-if hasTemplate(configData.Templates, "base") then
-	if not FileSystem.isFile(".gitignore") then
-		print("[Error] Expected .gitignore but it was not created.")
-		Process.exit(1)
-	end
-	if FileSystem.isFile("template.gitignore") then
-		print("[Error] template.gitignore should not be copied to project root.")
-		Process.exit(1)
-	end
+if not FileSystem.isFile(".gitignore") then
+	print("[Error] Expected .gitignore but it was not created.")
+	Process.exit(1)
+end
+if FileSystem.isFile("template.gitignore") then
+	print("[Error] template.gitignore should not be copied to project root.")
+	Process.exit(1)
 end
 
 if isTemplateScriptsDisabled(configData.Templates, "base")

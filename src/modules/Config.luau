@@ -5,7 +5,7 @@
 local Config = {
 	BaseTemplateName = "base",
 	TemplatesRootName = "templates",
-	ProjectConfigFileName = "bakery_project_configs.toml",
+	ProjectConfigFileName = "sb_setup_configs.toml",
 	TemplateConfigFileName = "template.toml",
 	TemplateSubmoduleFileName = "template.gitmodules",
 	TemplatePesdeFileName = "pesde-packages.toml",

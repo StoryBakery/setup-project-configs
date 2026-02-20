@@ -1,0 +1,4 @@
+# base 템플릿은 항상 자동 적용됩니다.
+# base 스크립트를 끄려면 아래처럼 테이블 엔트리를 사용합니다.
+# Templates = [{ Name = "base", EnableScripts = false }]
+Templates = []

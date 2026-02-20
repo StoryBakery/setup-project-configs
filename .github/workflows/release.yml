@@ -78,7 +78,7 @@ jobs:
           mkdir -p "$bundle_dir"
           cp "build/${{ matrix.binary_name }}" "$bundle_dir/${{ matrix.binary_name }}"
           cp -R src/templates "$bundle_dir/templates"
-          cp src/base_setup_project_configs.toml "$bundle_dir/base_setup_project_configs.toml"
+          cp src/base_sb_setup_configs.toml "$bundle_dir/base_sb_setup_configs.toml"
           (
             cd dist
             zip -qr "sb-setup-${{ matrix.target }}.zip" \
