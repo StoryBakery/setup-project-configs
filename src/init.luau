@@ -368,12 +368,154 @@ local function selectOptionalTemplates(
 	return selectOptionalTemplatesFromLineInput(optionalTemplates, currentTemplateNameSet)
 end
 
-local function buildProjectConfigContent(templates: { string }): string
-	local quoted: { string } = {}
-	for _, name in templates do
-		table.insert(quoted, `"{name}"`)
+local function mergeOptionalTemplates(
+	availableOptionalTemplates: { string },
+	configuredOptionalTemplatesInOrder: { string }
+): { string }
+	local mergedOptionalTemplates: { string } = {}
+	local mergedNameSet: { [string]: boolean } = {}
+
+	for _, name in availableOptionalTemplates do
+		if not mergedNameSet[name] then
+			mergedNameSet[name] = true
+			table.insert(mergedOptionalTemplates, name)
+		end
 	end
-	return `Templates = [{table.concat(quoted, ", ")}]\n`
+
+	for _, name in configuredOptionalTemplatesInOrder do
+		if not mergedNameSet[name] then
+			mergedNameSet[name] = true
+			table.insert(mergedOptionalTemplates, name)
+		end
+	end
+
+	return mergedOptionalTemplates
+end
+
+local function cloneConfiguredTemplateEntry(entry): any
+	if type(entry) ~= "table" then
+		return nil
+	end
+
+	local name = entry.Name
+	if type(name) ~= "string" or name == "" then
+		return nil
+	end
+
+	local clonedEntry = {
+		Name = name,
+	}
+
+	local source = entry.Source
+	if type(source) == "string" and source ~= "" then
+		clonedEntry.Source = source
+	end
+
+	local enableScripts = entry.EnableScripts
+	if type(enableScripts) == "boolean" then
+		clonedEntry.EnableScripts = enableScripts
+	end
+
+	return clonedEntry
+end
+
+local function buildTemplatesForConfig(
+	selectedTemplates: { string },
+	configuredTemplateEntryByName: { [string]: any }?
+): { [number]: any }
+	local templatesForConfig: { [number]: any } = {}
+
+	for _, name in selectedTemplates do
+		local configuredEntry = nil
+		if configuredTemplateEntryByName ~= nil then
+			configuredEntry = configuredTemplateEntryByName[name]
+		end
+
+		local preservedEntry = cloneConfiguredTemplateEntry(configuredEntry)
+		if preservedEntry ~= nil then
+			table.insert(templatesForConfig, preservedEntry)
+		else
+			table.insert(templatesForConfig, name)
+		end
+	end
+
+	return templatesForConfig
+end
+
+local function buildProjectConfigContent(templates: { [number]: any }): string
+	local function escapeTomlString(value: string): string
+		local escaped = value:gsub("\\", "\\\\")
+		return escaped:gsub('"', '\\"')
+	end
+
+	if #templates == 0 then
+		return "Templates = []\n"
+	end
+
+	local canUseStringArray = true
+	local stringTemplates: { string } = {}
+	for _, entry in templates do
+		if type(entry) == "string" and entry ~= "" then
+			table.insert(stringTemplates, entry)
+		else
+			canUseStringArray = false
+			break
+		end
+	end
+
+	if canUseStringArray then
+		local quoted: { string } = {}
+		for _, name in stringTemplates do
+			table.insert(quoted, `"{escapeTomlString(name)}"`)
+		end
+		return `Templates = [{table.concat(quoted, ", ")}]\n`
+	end
+
+	local lines: { string } = {}
+	for _, entry in templates do
+		local name = nil
+		local source = nil
+		local enableScripts = nil
+
+		if type(entry) == "string" then
+			if entry ~= "" then
+				name = entry
+			end
+		elseif type(entry) == "table" then
+			local entryName = entry.Name
+			if type(entryName) == "string" and entryName ~= "" then
+				name = entryName
+			end
+
+			local entrySource = entry.Source
+			if type(entrySource) == "string" and entrySource ~= "" then
+				source = entrySource
+			end
+
+			if type(entry.EnableScripts) == "boolean" then
+				enableScripts = entry.EnableScripts
+			end
+		end
+
+		if name ~= nil then
+			table.insert(lines, "[[Templates]]")
+			table.insert(lines, `Name = "{escapeTomlString(name)}"`)
+			if source ~= nil then
+				table.insert(lines, `Source = "{escapeTomlString(source)}"`)
+			end
+			if enableScripts ~= nil then
+				local enabledLabel = if enableScripts then "true" else "false"
+				table.insert(lines, `EnableScripts = {enabledLabel}`)
+			end
+			table.insert(lines, "")
+		end
+	end
+
+	if #lines == 0 then
+		return "Templates = []\n"
+	end
+
+	return table.concat(lines, "\n") .. "\n"
 end
 
 local function writeProjectConfig(
@@ -405,10 +547,9 @@ local function initProjectConfig(config, fileSystemUtils, forceInit: boolean)
 		return false, { Code = "SelectionCancelled" }
 	end
 
-	local templatesForConfig: { string } = {}
+	local templatesForConfig = buildTemplatesForConfig(selectedTemplates, nil)
 	local activeTemplates: { string } = { config.BaseTemplateName }
 	for _, name in selectedTemplates do
-		table.insert(templatesForConfig, name)
 		table.insert(activeTemplates, name)
 	end
 
@@ -429,38 +570,56 @@ local function initProjectConfig(config, fileSystemUtils, forceInit: boolean)
 	}
 end
 
-local function extractConfiguredTemplateNameSet(
+local function extractConfiguredTemplateData(
 	configPath: string,
 	baseTemplateName: string
-): { [string]: boolean }
+): ({ [string]: boolean }, { [string]: any }, { string })
 	local templateNameSet: { [string]: boolean } = {}
+	local templateEntryByName: { [string]: any } = {}
+	local configuredOptionalTemplatesInOrder: { string } = {}
+	local configuredOptionalTemplateSet: { [string]: boolean } = {}
 	templateNameSet[baseTemplateName] = true
 
 	local okRead, configData = TomlParser.ReadFile(configPath)
 	if not okRead then
-		return templateNameSet
+		return templateNameSet, templateEntryByName, configuredOptionalTemplatesInOrder
 	end
 
 	local templates = configData.Templates
 	if type(templates) ~= "table" then
-		return templateNameSet
+		return templateNameSet, templateEntryByName, configuredOptionalTemplatesInOrder
 	end
 
 	for _, entry in templates do
+		local name = nil
 		if type(entry) == "string" then
 			if entry ~= "" then
-				templateNameSet[entry] = true
+				name = entry
+				if templateEntryByName[entry] == nil then
+					templateEntryByName[entry] = entry
+				end
 			end
 		elseif type(entry) == "table" then
-			local name = entry.Name
-			if type(name) == "string" and name ~= "" then
-				templateNameSet[name] = true
+			local entryName = entry.Name
+			if type(entryName) == "string" and entryName ~= "" then
+				name = entryName
+				if templateEntryByName[entryName] == nil then
+					templateEntryByName[entryName] = cloneConfiguredTemplateEntry(entry)
+				end
+			end
+		end
+
+		if name ~= nil then
+			templateNameSet[name] = true
+			if name ~= baseTemplateName and not configuredOptionalTemplateSet[name] then
+				configuredOptionalTemplateSet[name] = true
+				table.insert(configuredOptionalTemplatesInOrder, name)
 			end
 		end
 	end
 
 	templateNameSet[baseTemplateName] = true
-	return templateNameSet
+	return templateNameSet, templateEntryByName, configuredOptionalTemplatesInOrder
 end
 
 local function configureProjectConfig(config, fileSystemUtils)
@@ -468,19 +627,21 @@ local function configureProjectConfig(config, fileSystemUtils)
 	local hadExisting = FileSystem.isFile(projectConfigPath)
 
 	local templateNames = collectTemplateOptions(config, fileSystemUtils)
-	local optionalTemplates = filterOptionalTemplates(templateNames, config.BaseTemplateName)
-	local configuredTemplateNameSet =
-		extractConfiguredTemplateNameSet(projectConfigPath, config.BaseTemplateName)
+	local availableOptionalTemplates = filterOptionalTemplates(templateNames, config.BaseTemplateName)
+	local configuredTemplateNameSet, configuredTemplateEntryByName, configuredOptionalTemplatesInOrder =
+		extractConfiguredTemplateData(projectConfigPath, config.BaseTemplateName)
+	local optionalTemplates =
+		mergeOptionalTemplates(availableOptionalTemplates, configuredOptionalTemplatesInOrder)
 	local okSelect, selectedTemplates =
 		selectOptionalTemplates(optionalTemplates, configuredTemplateNameSet)
 	if not okSelect or selectedTemplates == nil then
 		return false, { Code = "SelectionCancelled" }
 	end
 
-	local templatesForConfig: { string } = {}
+	local templatesForConfig =
+		buildTemplatesForConfig(selectedTemplates, configuredTemplateEntryByName)
 	local activeTemplates: { string } = { config.BaseTemplateName }
 	for _, name in selectedTemplates do
-		table.insert(templatesForConfig, name)
 		table.insert(activeTemplates, name)
 	end
 

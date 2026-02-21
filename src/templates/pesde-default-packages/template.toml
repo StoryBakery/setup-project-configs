@@ -1,3 +1,0 @@
-Name = "pesde-default-packages"
-Description = "Default pesde packages."
-Extends = ["base"]

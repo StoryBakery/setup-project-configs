@@ -73,54 +73,98 @@ local function removeDirectoryRecursive(path: string, fileSystemUtils): boolean
 	return true
 end
 
-local function serializeTemplateEntry(entry): (boolean, string?)
+local function escapeTomlString(value: string): string
+	local escaped = value:gsub("\\", "\\\\")
+	return escaped:gsub('"', '\\"')
+end
+
+local function normalizeTemplateEntry(entry): (boolean, { [string]: any }?, string?)
 	if type(entry) == "string" then
 		if entry == "" then
-			return false, "Template name is empty."
+			return false, nil, "Template name is empty."
 		end
-		return true, `"{entry}"`
+
+		return true, { Name = entry }, nil
 	end
 
 	if type(entry) ~= "table" then
-		return false, "Template entry must be a string or table."
+		return false, nil, "Template entry must be a string or table."
 	end
 
 	local name = entry.Name
 	if type(name) ~= "string" or name == "" then
-		return false, "Template entry Name is invalid."
+		return false, nil, "Template entry Name is invalid."
 	end
 
-	local fields = { `Name = "{name}"` }
+	local normalized = { Name = name }
+
 	local source = entry.Source
 	if source ~= nil then
 		if type(source) ~= "string" or source == "" then
-			return false, "Template entry Source is invalid."
+			return false, nil, "Template entry Source is invalid."
 		end
-		table.insert(fields, `Source = "{source}"`)
+		normalized.Source = source
 	end
 
 	local enableScripts = entry.EnableScripts
 	if enableScripts ~= nil then
 		if type(enableScripts) ~= "boolean" then
-			return false, "Template entry EnableScripts is invalid."
+			return false, nil, "Template entry EnableScripts is invalid."
 		end
-		local value = if enableScripts then "true" else "false"
-		table.insert(fields, `EnableScripts = {value}`)
+		normalized.EnableScripts = enableScripts
 	end
 
-	return true, "{ " .. table.concat(fields, ", ") .. " }"
+	return true, normalized, nil
 end
 
 local function buildProjectConfigContent(templates: { [number]: any }): (boolean, string?)
-	local serialized: { string } = {}
-	for _, entry in templates do
-		local okSerialize, valueOrErr = serializeTemplateEntry(entry)
-		if not okSerialize then
-			return false, valueOrErr
-		end
-		table.insert(serialized, valueOrErr)
+	if #templates == 0 then
+		return true, "Templates = []\n"
 	end
-	return true, `Templates = [{table.concat(serialized, ", ")}]\n`
+
+	local normalizedEntries: { [number]: { [string]: any } } = {}
+	local allStringEntries = true
+
+	for _, entry in templates do
+		local okNormalize, normalizedEntry, normalizeError = normalizeTemplateEntry(entry)
+		if not okNormalize or normalizedEntry == nil then
+			return false, normalizeError
+		end
+
+		table.insert(normalizedEntries, normalizedEntry)
+		if type(entry) ~= "string" then
+			allStringEntries = false
+		end
+	end
+
+	if allStringEntries then
+		local quotedNames: { string } = {}
+		for _, entry in normalizedEntries do
+			table.insert(quotedNames, `"{escapeTomlString(entry.Name)}"`)
+		end
+		return true, `Templates = [{table.concat(quotedNames, ", ")}]\n`
+	end
+
+	local lines: { string } = {}
+	for _, entry in normalizedEntries do
+		table.insert(lines, "[[Templates]]")
+		table.insert(lines, `Name = "{escapeTomlString(entry.Name)}"`)
+
+		local source = entry.Source
+		if source ~= nil then
+			table.insert(lines, `Source = "{escapeTomlString(source)}"`)
+		end
+
+		local enableScripts = entry.EnableScripts
+		if type(enableScripts) == "boolean" then
+			local value = if enableScripts then "true" else "false"
+			table.insert(lines, `EnableScripts = {value}`)
+		end
+
+		table.insert(lines, "")
+	end
+
+	return true, table.concat(lines, "\n") .. "\n"
 end
 
 local function writeProjectConfig(path: string, templates: { [number]: any }, fileSystemUtils): boolean
@@ -201,7 +245,7 @@ local function hasSameTemplateNames(actualTemplates: { string }, expectedTemplat
 	return true
 end
 
-local function readConfiguredTemplateNames(configPath: string): (boolean, { string }?)
+local function readConfiguredTemplates(configPath: string): (boolean, { [number]: any }?)
 	local okRead, configDataOrErr = TomlParser.ReadFile(configPath)
 	if not okRead then
 		local code = configDataOrErr.Code or "unknown"
@@ -213,6 +257,15 @@ local function readConfiguredTemplateNames(configPath: string): (boolean, { stri
 	local templates = configDataOrErr.Templates
 	if type(templates) ~= "table" then
 		print(`[Error] Templates field is missing in "{configPath}".`)
+		return false, nil
+	end
+
+	return true, templates
+end
+
+local function readConfiguredTemplateNames(configPath: string): (boolean, { string }?)
+	local okRead, templates = readConfiguredTemplates(configPath)
+	if not okRead or templates == nil then
 		return false, nil
 	end
 
@@ -231,6 +284,25 @@ local function readConfiguredTemplateNames(configPath: string): (boolean, { stri
 	end
 
 	return true, templateNames
+end
+
+local function buildTemplateTableEntryByName(
+	templates: { [number]: any }
+): { [string]: { [string]: any } }
+	local tableEntryByName: { [string]: { [string]: any } } = {}
+
+	for _, entry in templates do
+		if type(entry) == "table" then
+			local name = entry.Name
+			if type(name) == "string" and name ~= "" then
+				if tableEntryByName[name] == nil then
+					tableEntryByName[name] = entry
+				end
+			end
+		end
+	end
+
+	return tableEntryByName
 end
 
 local function runTestCase(
@@ -297,6 +369,7 @@ local function runConfigCommandTestCase(
 	initialTemplates: { [number]: any },
 	input: string,
 	expectedTemplates: { string },
+	expectedSourceByTemplateName: { [string]: string }?,
 	initScriptPath: string,
 	tmpRoot: string,
 	index: number,
@@ -357,6 +430,30 @@ local function runConfigCommandTestCase(
 		print(`[Test] expected: {expectedLabel}`)
 		print(`[Test] actual: {actualLabel}`)
 		return false
+	end
+
+	if expectedSourceByTemplateName ~= nil then
+		local okReadConfigured, configuredEntries = readConfiguredTemplates(configPath)
+		if not okReadConfigured or configuredEntries == nil then
+			return false
+		end
+
+		local tableEntryByName = buildTemplateTableEntryByName(configuredEntries)
+		for templateName, expectedSource in expectedSourceByTemplateName do
+			local templateEntry = tableEntryByName[templateName]
+			if templateEntry == nil then
+				print(`[Test] Config case "{caseName}" missing table entry for "{templateName}".`)
+				return false
+			end
+
+			local actualSource = templateEntry.Source
+			if actualSource ~= expectedSource then
+				print(`[Test] Config case "{caseName}" source mismatch for "{templateName}".`)
+				print(`[Test] expected: {expectedSource}`)
+				print(`[Test] actual: {tostring(actualSource)}`)
+				return false
+			end
+		end
 	end
 
 	local okCleanup = removeDirectoryRecursive(caseRoot, fileSystemUtils)
@@ -448,6 +545,35 @@ local function runStandaloneTemplateDiscoveryTest(
 	return true
 end
 
+local function listOptionalTemplatesInRepo(
+	repoRoot: string,
+	fileSystemUtils
+): { string }
+	local templatesRoot = fileSystemUtils.JoinPath(repoRoot, "src/templates")
+	if not FileSystem.isDir(templatesRoot) then
+		return {}
+	end
+
+	local okRead, entries = pcall(FileSystem.readDir, templatesRoot)
+	if not okRead or entries == nil then
+		return {}
+	end
+
+	local optionalTemplates: { string } = {}
+	for _, entry in entries do
+		if entry ~= "base" then
+			local templatePath = fileSystemUtils.JoinPath(templatesRoot, entry)
+			local templateConfigPath = fileSystemUtils.JoinPath(templatePath, "template.toml")
+			if FileSystem.isDir(templatePath) and FileSystem.isFile(templateConfigPath) then
+				table.insert(optionalTemplates, entry)
+			end
+		end
+	end
+
+	table.sort(optionalTemplates)
+	return optionalTemplates
+end
+
 local repoRoot = resolveRepoRoot(FileSystemUtils)
 local testsRoot = FileSystemUtils.JoinPath(repoRoot, "tests")
 local tmpRoot = FileSystemUtils.JoinPath(testsRoot, ".tmp")
@@ -471,6 +597,8 @@ if not FileSystem.isFile(initScriptPath) then
 	Process.exit(1)
 end
 
+local optionalTemplatesInRepo = listOptionalTemplatesInRepo(repoRoot, FileSystemUtils)
+
 local testCases = {
 	{
 		Name = "base",
@@ -480,49 +608,36 @@ local testCases = {
 		Name = "base-disable-scripts",
 		Templates = { { Name = "base", EnableScripts = false } },
 	},
-	{
-		Name = "base-disable-scripts-and-non-luau",
-		Templates = { { Name = "base", EnableScripts = false }, "non-luau" },
-	},
-	{
-		Name = "non-luau",
-		Templates = { "non-luau" },
-	},
-	{
-		Name = "roblox-place",
-		Templates = { "roblox-place" },
-	},
-	{
-		Name = "with-bakerywave",
-		Templates = { "with-bakerywave" },
-	},
-	{
-		Name = "with-bakery-dev-handbook",
-		Templates = { "with-bakery-dev-handbook" },
-	},
-	{
-		Name = "pesde-default-packages",
-		Templates = { "pesde-default-packages" },
-	},
-	{
-		Name = "bakerywave-and-handbook",
-		Templates = { "with-bakerywave", "with-bakery-dev-handbook" },
-	},
-	{
-		Name = "bakerywave-and-pesde",
-		Templates = { "with-bakerywave", "pesde-default-packages" },
-	},
-	{
-		Name = "all-templates",
-		Templates = {
-			"non-luau",
-			"roblox-place",
-			"with-bakerywave",
-			"with-bakery-dev-handbook",
-			"pesde-default-packages",
-		},
-	},
 }
+
+for _, templateName in optionalTemplatesInRepo do
+	table.insert(testCases, {
+		Name = `only-{templateName}`,
+		Templates = { templateName },
+	})
+end
+
+if #optionalTemplatesInRepo >= 2 then
+	table.insert(testCases, {
+		Name = "first-two-optional-templates",
+		Templates = {
+			optionalTemplatesInRepo[1],
+			optionalTemplatesInRepo[2],
+		},
+	})
+end
+
+if #optionalTemplatesInRepo > 0 then
+	local allOptionalTemplates: { string } = {}
+	for _, templateName in optionalTemplatesInRepo do
+		table.insert(allOptionalTemplates, templateName)
+	end
+
+	table.insert(testCases, {
+		Name = "all-optional-templates",
+		Templates = allOptionalTemplates,
+	})
+end
 
 local failed = 0
 local okStandalone = runStandaloneTemplateDiscoveryTest(repoRoot, tmpRoot, FileSystemUtils)
@@ -544,20 +659,62 @@ for index, case in testCases do
 	end
 end
 
-local configCommandTestCases = {
-	{
-		Name = "config-toggle-non-luau",
-		InitialTemplates = { "pesde-default-packages" },
+local configCommandTestCases = {}
+
+local firstOptionalTemplate = optionalTemplatesInRepo[1]
+if firstOptionalTemplate ~= nil then
+	table.insert(configCommandTestCases, {
+		Name = "config-toggle-first-optional-template",
+		InitialTemplates = {},
 		Input = "1\nsave\n",
-		ExpectedTemplates = { "non-luau", "pesde-default-packages" },
-	},
-	{
+		ExpectedTemplates = { firstOptionalTemplate },
+		ExpectedSourceByTemplateName = nil,
+	})
+
+	table.insert(configCommandTestCases, {
 		Name = "config-cancel",
-		InitialTemplates = { "with-bakerywave" },
+		InitialTemplates = { firstOptionalTemplate },
 		Input = "cancel\n",
-		ExpectedTemplates = { "with-bakerywave" },
+		ExpectedTemplates = { firstOptionalTemplate },
+		ExpectedSourceByTemplateName = nil,
+	})
+end
+
+local customTemplateName = "custom-template"
+local customTemplateSource = "./templates/custom-template"
+local initialTemplatesWithCustom = { { Name = customTemplateName, Source = customTemplateSource } }
+if firstOptionalTemplate ~= nil then
+	table.insert(initialTemplatesWithCustom, 1, firstOptionalTemplate)
+end
+
+local expectedTemplatesWithCustom = { customTemplateName }
+if firstOptionalTemplate ~= nil then
+	table.insert(expectedTemplatesWithCustom, 1, firstOptionalTemplate)
+end
+
+table.insert(configCommandTestCases, {
+	Name = "config-preserve-custom-template-source",
+	InitialTemplates = initialTemplatesWithCustom,
+	Input = "save\n",
+	ExpectedTemplates = expectedTemplatesWithCustom,
+	ExpectedSourceByTemplateName = {
+		["custom-template"] = "./templates/custom-template",
 	},
-}
+})
+
+local expectedTemplatesWithoutCustom: { string } = {}
+if firstOptionalTemplate ~= nil then
+	table.insert(expectedTemplatesWithoutCustom, firstOptionalTemplate)
+end
+
+local customTemplateToggleIndex = #optionalTemplatesInRepo + 1
+table.insert(configCommandTestCases, {
+	Name = "config-toggle-custom-template-off",
+	InitialTemplates = initialTemplatesWithCustom,
+	Input = tostring(customTemplateToggleIndex) .. "\nsave\n",
+	ExpectedTemplates = expectedTemplatesWithoutCustom,
+	ExpectedSourceByTemplateName = nil,
+})
 
 for index, case in configCommandTestCases do
 	local ok = runConfigCommandTestCase(
@@ -565,6 +722,7 @@ for index, case in configCommandTestCases do
 		case.InitialTemplates,
 		case.Input,
 		case.ExpectedTemplates,
+		case.ExpectedSourceByTemplateName,
 		initScriptPath,
 		tmpRoot,
 		index,
@@ -573,6 +731,11 @@ for index, case in configCommandTestCases do
 	if not ok then
 		failed += 1
 	end
+end
+
+local okCleanupTmp = removeDirectoryRecursive(tmpRoot, FileSystemUtils)
+if not okCleanupTmp then
+	Process.exit(1)
 end
 
 if failed > 0 then

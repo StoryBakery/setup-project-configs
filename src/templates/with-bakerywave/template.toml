@@ -1,3 +1,0 @@
-Name = "with-bakerywave"
-Description = "Docs workflow additions."
-Extends = ["base"]
