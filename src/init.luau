@@ -51,10 +51,14 @@ local function printInitUsage()
 end
 
 local function printConfigUsage()
-	print("Usage: sb-setup config")
-	print("   or: lune run src/init config")
+	print("Usage: sb-setup config [--no-install]")
+	print("   or: lune run src/init config [--no-install]")
 	print("")
 	print("Interactively edit templates in sb_setup_configs.toml.")
+	print("By default, install runs automatically after save.")
+	print("")
+	print("Options:")
+	print("  --no-install    Skip automatic install after save.")
 end
 
 local function printListUsage()
@@ -102,6 +106,7 @@ end
 local function parseArgs(args: { string })
 	local commandName = nil
 	local force = false
+	local noInstall = false
 	local help = false
 	local errors: { string } = {}
 
@@ -112,6 +117,8 @@ local function parseArgs(args: { string })
 			help = true
 		elseif arg == "--force" then
 			force = true
+		elseif arg == "--no-install" then
+			noInstall = true
 		elseif normalizedCommand ~= nil then
 			if commandName ~= nil and commandName ~= normalizedCommand then
 				table.insert(errors, `Conflicting command "{arg}".`)
@@ -128,10 +135,14 @@ local function parseArgs(args: { string })
 	if force and commandName ~= "init" then
 		table.insert(errors, 'Option "--force" is only available for init.')
 	end
+	if noInstall and commandName ~= "config" then
+		table.insert(errors, 'Option "--no-install" is only available for config.')
+	end
 
 	return {
 		Command = commandName,
 		Force = force,
+		NoInstall = noInstall,
 		Help = help,
 		Errors = errors,
 	}
@@ -738,7 +749,13 @@ if optionName == "config" then
 	if configResult.Templates ~= nil then
 		print(`[Config] Active templates: {formatTemplateNamesForPrint(configResult.Templates)}`)
 	end
-	Process.exit(0)
+
+	if options.NoInstall then
+		print("[Config] Skipping install (--no-install).")
+		Process.exit(0)
+	end
+
+	print("[Config] Running install with updated templates.")
 end
 
 local INSTALL_ERROR_HANDLERS = {

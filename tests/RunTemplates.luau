@@ -305,6 +305,56 @@ local function buildTemplateTableEntryByName(
 	return tableEntryByName
 end
 
+local function isAbsolutePath(path: string): boolean
+	if path:sub(1, 1) == "/" then
+		return true
+	end
+	if path:match("^[A-Za-z]:[\\/]") then
+		return true
+	end
+	return false
+end
+
+local function ensureTemplateSourcesForConfigCase(
+	initialTemplates: { [number]: any },
+	caseRoot: string,
+	fileSystemUtils
+): boolean
+	for _, entry in initialTemplates do
+		if type(entry) == "table" then
+			local name = entry.Name
+			local source = entry.Source
+			if type(name) == "string" and name ~= "" and type(source) == "string" and source ~= "" then
+				local sourceRoot = source
+				if not isAbsolutePath(sourceRoot) then
+					sourceRoot = fileSystemUtils.JoinPath(caseRoot, sourceRoot)
+				end
+
+				fileSystemUtils.MakeDirectoryRecursive(sourceRoot)
+				local templateConfigPath = fileSystemUtils.JoinPath(sourceRoot, "template.toml")
+				local templateConfigContent = table.concat({
+					`Name = "{escapeTomlString(name)}"`,
+					'Description = "Config command test template."',
+					'Extends = ["base"]',
+					"",
+				}, "\n")
+
+				local okWrite, writeErr = pcall(function()
+					FileSystem.writeFile(templateConfigPath, templateConfigContent)
+				end)
+				if not okWrite then
+					print(
+						`[Error] Failed to create config test template "{templateConfigPath}": {tostring(writeErr)}`
+					)
+					return false
+				end
+			end
+		end
+	end
+
+	return true
+end
+
 local function runTestCase(
 	caseName: string,
 	templates: { [number]: any },
@@ -370,6 +420,8 @@ local function runConfigCommandTestCase(
 	input: string,
 	expectedTemplates: { string },
 	expectedSourceByTemplateName: { [string]: string }?,
+	shouldRunInstall: boolean,
+	useNoInstallOption: boolean?,
 	initScriptPath: string,
 	tmpRoot: string,
 	index: number,
@@ -386,12 +438,25 @@ local function runConfigCommandTestCase(
 		return false
 	end
 
+	if expectedSourceByTemplateName ~= nil then
+		local okEnsureSources =
+			ensureTemplateSourcesForConfigCase(initialTemplates, caseRoot, fileSystemUtils)
+		if not okEnsureSources then
+			return false
+		end
+	end
+
 	print(`[Test] Running "{caseName}" config command test.`)
+
+	local commandArgs = { "run", initScriptPath, "config" }
+	if useNoInstallOption == true then
+		table.insert(commandArgs, "--no-install")
+	end
 
 	local okExec, resultOrErr = pcall(
 		Process.exec,
 		"lune",
-		{ "run", initScriptPath, "config" },
+		commandArgs,
 		{
 			capture = true,
 			cwd = caseRoot,
@@ -453,6 +518,19 @@ local function runConfigCommandTestCase(
 				print(`[Test] actual: {tostring(actualSource)}`)
 				return false
 			end
+		end
+	end
+
+	local gitignorePath = fileSystemUtils.JoinPath(caseRoot, ".gitignore")
+	if shouldRunInstall then
+		if not FileSystem.isFile(gitignorePath) then
+			print(`[Test] Config case "{caseName}" expected install to run.`)
+			return false
+		end
+	else
+		if FileSystem.isFile(gitignorePath) then
+			print(`[Test] Config case "{caseName}" expected install to be skipped.`)
+			return false
 		end
 	end
 
@@ -669,6 +747,8 @@ if firstOptionalTemplate ~= nil then
 		Input = "1\nsave\n",
 		ExpectedTemplates = { firstOptionalTemplate },
 		ExpectedSourceByTemplateName = nil,
+		ShouldRunInstall = true,
+		UseNoInstallOption = nil,
 	})
 
 	table.insert(configCommandTestCases, {
@@ -677,6 +757,18 @@ if firstOptionalTemplate ~= nil then
 		Input = "cancel\n",
 		ExpectedTemplates = { firstOptionalTemplate },
 		ExpectedSourceByTemplateName = nil,
+		ShouldRunInstall = false,
+		UseNoInstallOption = nil,
+	})
+
+	table.insert(configCommandTestCases, {
+		Name = "config-save-no-install-option",
+		InitialTemplates = {},
+		Input = "1\nsave\n",
+		ExpectedTemplates = { firstOptionalTemplate },
+		ExpectedSourceByTemplateName = nil,
+		ShouldRunInstall = false,
+		UseNoInstallOption = true,
 	})
 end
 
@@ -700,6 +792,8 @@ table.insert(configCommandTestCases, {
 	ExpectedSourceByTemplateName = {
 		["custom-template"] = "./templates/custom-template",
 	},
+	ShouldRunInstall = true,
+	UseNoInstallOption = nil,
 })
 
 local expectedTemplatesWithoutCustom: { string } = {}
@@ -714,6 +808,8 @@ table.insert(configCommandTestCases, {
 	Input = tostring(customTemplateToggleIndex) .. "\nsave\n",
 	ExpectedTemplates = expectedTemplatesWithoutCustom,
 	ExpectedSourceByTemplateName = nil,
+	ShouldRunInstall = true,
+	UseNoInstallOption = nil,
 })
 
 for index, case in configCommandTestCases do
@@ -723,6 +819,8 @@ for index, case in configCommandTestCases do
 		case.Input,
 		case.ExpectedTemplates,
 		case.ExpectedSourceByTemplateName,
+		case.ShouldRunInstall,
+		case.UseNoInstallOption,
 		initScriptPath,
 		tmpRoot,
 		index,
