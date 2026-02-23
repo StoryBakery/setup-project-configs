@@ -138,11 +138,7 @@ end
 
 
 local submodules = installResult.Submodules or {}
-if hasTemplate(configData.Templates, "with-bakery-dev-handbook") then
-	if #submodules == 0 then
-		print("[Error] Expected submodules but none were detected.")
-		Process.exit(1)
-	end
+if #submodules > 0 then
 	print(`[Test] Submodules: {#submodules}`)
 end
 

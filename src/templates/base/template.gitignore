@@ -35,6 +35,8 @@ roblox_packages/
 /out
 
 # Temp
-**/tmp
+tmp
+.tmp
+tmp.**
 
 # END managed-by: sb-setup id: sb.gitignore.base

@@ -1,0 +1,3 @@
+Name = "luau"
+Description = "Luau template."
+Extends = []
