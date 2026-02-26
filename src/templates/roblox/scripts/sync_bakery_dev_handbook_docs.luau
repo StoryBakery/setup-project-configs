@@ -1,5 +1,5 @@
 --[[
-	bakery-dev-handbook 문서를 스킬 레퍼런스로 동기화하는 스크립트입니다.
+	bakery-dev-handbook roblox 문서를 스킬 레퍼런스로 동기화하는 스크립트입니다.
 ]]
 
 local FileSystem = require("@lune/fs")
@@ -7,10 +7,11 @@ local Process = require("@lune/process")
 
 local HANDBOOK_REPO_URL = "https://github.com/StoryBakery/bakery-dev-handbook"
 local HANDBOOK_REF = "main"
-local HANDBOOK_ROOT = ".agents/skills/bakery-dev-handbook-style/references/bakery-dev-handbook"
-local SKILL_GITIGNORE_PATH = ".agents/skills/bakery-dev-handbook-style/.gitignore"
+local HANDBOOK_ROOT = ".agents/skills/roblox-scripting/references/bakery-dev-handbook"
+local SKILL_GITIGNORE_PATH = ".agents/skills/roblox-scripting/.gitignore"
 local SKILL_GITIGNORE_RULE = "/references/bakery-dev-handbook/"
-local SCRIPTING_GUIDE_PATH = HANDBOOK_ROOT .. "/docs/frameworks/scripting/scripting-guide.md"
+local GUIDE_RELATIVE_PATH = "docs/roblox"
+local GUIDE_ROOT = HANDBOOK_ROOT .. "/" .. GUIDE_RELATIVE_PATH
 
 local function joinPath(a: string, b: string): string
 	if a == "" or a == "." then
@@ -89,13 +90,50 @@ local function hasGit(): boolean
 	return result.ok == true
 end
 
+local function ensureSparseCheckoutPath(): boolean
+	local okInit, initError = runGit({ "sparse-checkout", "init", "--cone" }, HANDBOOK_ROOT)
+	if not okInit then
+		print(`[Setup] Sparse-checkout is not available. Keeping current checkout: {initError}`)
+		return false
+	end
+
+	local okSet, setError = runGit({ "sparse-checkout", "set", GUIDE_RELATIVE_PATH }, HANDBOOK_ROOT)
+	if not okSet then
+		print(`[Setup] Failed to set sparse-checkout path "{GUIDE_RELATIVE_PATH}": {setError}`)
+		return false
+	end
+
+	return true
+end
+
 local function cloneHandbook(): (boolean, string)
 	local parentDirectory = getDirectoryName(HANDBOOK_ROOT)
 	if parentDirectory ~= "" then
 		makeDirectoryRecursive(parentDirectory)
 	end
 
-	return runGit({
+	local okSparseClone, sparseCloneError = runGit({
+		"clone",
+		"--depth",
+		"1",
+		"--filter=blob:none",
+		"--sparse",
+		"--branch",
+		HANDBOOK_REF,
+		HANDBOOK_REPO_URL,
+		HANDBOOK_ROOT,
+	}, nil)
+	if okSparseClone then
+		local okSparseSet, sparseSetError =
+			runGit({ "sparse-checkout", "set", GUIDE_RELATIVE_PATH }, HANDBOOK_ROOT)
+		if not okSparseSet then
+			return false, sparseSetError
+		end
+		return true, ""
+	end
+
+	print(`[Setup] Sparse clone failed. Falling back to regular clone: {sparseCloneError}`)
+	local okClone, cloneError = runGit({
 		"clone",
 		"--depth",
 		"1",
@@ -104,9 +142,16 @@ local function cloneHandbook(): (boolean, string)
 		HANDBOOK_REPO_URL,
 		HANDBOOK_ROOT,
 	}, nil)
+	if not okClone then
+		return false, cloneError
+	end
+
+	ensureSparseCheckoutPath()
+	return true, ""
 end
 
 local function updateHandbook(): (boolean, string)
+	ensureSparseCheckoutPath()
 	return runGit({ "pull", "--ff-only", "origin", HANDBOOK_REF }, HANDBOOK_ROOT)
 end
 
@@ -185,10 +230,10 @@ else
 	print("[Setup] Cloned bakery-dev-handbook docs.")
 end
 
-if FileSystem.isFile(SCRIPTING_GUIDE_PATH) then
-	print("[Setup] bakery-dev-handbook scripting references are ready.")
+if FileSystem.isDir(GUIDE_ROOT) then
+	print("[Setup] bakery-dev-handbook roblox references are ready.")
 else
-	print("[Setup] bakery-dev-handbook repository is synced, but scripting docs were not found.")
+	print("[Setup] bakery-dev-handbook repository is synced, but roblox docs were not found.")
 end
 
 Process.exit(0)

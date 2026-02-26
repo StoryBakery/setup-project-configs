@@ -1,0 +1,3 @@
+Name = "markdown-style"
+Description = "Markdown style template."
+Extends = []

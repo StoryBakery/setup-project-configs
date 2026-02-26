@@ -1,1 +1,1 @@
-Templates = ["base"]
+Templates = ["luau", "markdown-style"]

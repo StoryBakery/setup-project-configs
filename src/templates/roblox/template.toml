@@ -1,0 +1,3 @@
+Name = "roblox"
+Description = "Roblox extension template."
+Extends = ["luau"]

@@ -1,24 +1,12 @@
 ---
 name: luau-scripting
-description: Luau scripting conventions and validation workflow for this project. Use when creating, editing, reviewing, or refactoring Luau scripts.
+description: Bakery dev handbook Luau style requirements for this project. Use when writing or editing Luau scripts that must follow the handbook guides.
 ---
 
-# Luau Scripting
+# Luau Handbook Style
 
-## Core Rules
+Read and follow the documents below before writing or editing Luau scripts.
 
-- Do not change existing coding style unless the user explicitly requests it.
-- Do not rewrite `if-then-else` into ternary-style patterns.
-- Do not add `pairs` to `for i, v in t do` loops without explicit instruction.
-- Reuse existing shared utilities instead of creating new local helpers for the same purpose.
+- `./references/bakery-dev-handbook/docs/luau`
 
-## Comments
-
-- Write comments in Korean.
-- Add a block comment above each module that explains the module.
-
-## Output And Branching
-
-- Write output strings in English.
-- Avoid overusing `assert` and `error`.
-- Do not add type-validation branches (`if`, `typeof`) unless explicitly requested.
+Do not invent conventions that are not written in the guides.

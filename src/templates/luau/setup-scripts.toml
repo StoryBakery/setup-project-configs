@@ -1,5 +1,5 @@
 [[Scripts]]
-Name = "sync-bakery-dev-handbook-docs"
+Name = "sync-bakery-dev-handbook-luau-docs"
 Type = "Lune"
 Script = "scripts/sync_bakery_dev_handbook_docs.luau"
 Root = "Project"

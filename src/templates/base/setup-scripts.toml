@@ -1,6 +1,6 @@
 [[Scripts]]
-Name = "install-gitleaks"
+Name = "setup-git-hooks"
 Type = "Lune"
-Script = "scripts/install_gitleaks.luau"
+Script = "scripts/setup_git_hooks.luau"
 Root = "Project"
 ScriptRoot = "Template"

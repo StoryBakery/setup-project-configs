@@ -1,41 +1,3 @@
-# Rojo
-/sourcemap.json
-
-# Artifacts
-/*.lock
-/*.rbxl
-/*.rbxlx
-/*.rbxm
-/*.rbxmx
-
-# darklua
-/out
-/.darklua-sourcemap.json
-
-# Lune
-luau_packages/
-lune_packages/
-roblox_packages/
-
-# Pesde
-.pesde/
-
-# Wally
-/Packages
-/ServerPackages
-/DevPackages
-wally.lock
-
-# Git
-
-# Misc
-.DS_Store
-.vscode
-
-/node_modules
-/build
-
-**/tmp
 # BEGIN managed-by: sb-setup id: sb.gitignore.base
 # Story Bakery default ignores
 
@@ -75,5 +37,6 @@ roblox_packages/
 # Temp
 tmp
 .tmp
+tmp.**
 
 # END managed-by: sb-setup id: sb.gitignore.base
