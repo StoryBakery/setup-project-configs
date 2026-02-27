@@ -1,6 +1,6 @@
 [[Scripts]]
-Name = "setup-git-hooks"
+Name = "setup-pre-commit-hooks"
 Type = "Lune"
-Script = "scripts/setup_git_hooks.luau"
+Script = "scripts/setup_pre_commit_hooks.luau"
 Root = "Project"
 ScriptRoot = "Template"

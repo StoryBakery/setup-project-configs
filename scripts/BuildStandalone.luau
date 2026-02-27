@@ -5,7 +5,7 @@
 local FileSystem = require("@lune/fs")
 local Process = require("@lune/process")
 
-local FileSystemUtils = require("../src/modules/FileSystemUtils")
+local FileSystemUtils = require("../src/cores/FileSystemUtils")
 
 type ModuleEntry = {
 	Name: string,
@@ -13,13 +13,13 @@ type ModuleEntry = {
 }
 
 local MODULES: { ModuleEntry } = {
-	{ Name = "Config", Path = "src/modules/Config.luau" },
-	{ Name = "FileSystemUtils", Path = "src/modules/FileSystemUtils.luau" },
-	{ Name = "TemplateRoots", Path = "src/modules/TemplateRoots.luau" },
-	{ Name = "ManagedBlock", Path = "src/modules/ManagedBlock.luau" },
-	{ Name = "TomlParser", Path = "src/modules/TomlParser.luau" },
-	{ Name = "Submodule", Path = "src/modules/Submodule.luau" },
-	{ Name = "Installer", Path = "src/modules/Installer.luau" },
+	{ Name = "Config", Path = "src/cores/Config.luau" },
+	{ Name = "FileSystemUtils", Path = "src/cores/FileSystemUtils.luau" },
+	{ Name = "TemplateRoots", Path = "src/cores/TemplateRoots.luau" },
+	{ Name = "ManagedBlock", Path = "src/cores/ManagedBlock.luau" },
+	{ Name = "TomlParser", Path = "src/cores/TomlParser.luau" },
+	{ Name = "Submodule", Path = "src/cores/Submodule.luau" },
+	{ Name = "Installer", Path = "src/cores/Installer.luau" },
 }
 
 local MODULE_NAME_SET: { [string]: boolean } = {}
@@ -30,6 +30,7 @@ end
 local ENTRY_PATH = "src/init.luau"
 local OUTPUT_PATH = "build/init.standalone.luau"
 local TEMPLATES_ROOT = "src/templates"
+local MODULES_ROOT = "src/modules"
 
 local function normalizeLineEndings(content: string): string
 	local normalized = content:gsub("\r\n", "\n")
@@ -67,7 +68,7 @@ end
 
 local function replaceEntryRequires(source: string): string
 	return source:gsub(
-		'(local%s+([%a_][%w_]*)%s*=%s*require%("@self/modules/([%w_]+)"%))',
+		'(local%s+([%a_][%w_]*)%s*=%s*require%("@self/cores/([%w_]+)"%))',
 		function(fullLine: string, variableName: string, moduleName: string): string
 			if MODULE_NAME_SET[moduleName] then
 				return `local {variableName} = Modules.{moduleName}`
@@ -93,6 +94,31 @@ local function updateTemplateDigest(digest: number, value: string): number
 	return updatedDigest
 end
 
+local function appendEmbeddedFileEntry(
+	entries: { string },
+	relativePath: string,
+	sourcePath: string,
+	digest: number,
+	totalBytes: number
+): (boolean, number, number, string?)
+	local okRead, content = readSource(sourcePath)
+	if not okRead or content == nil then
+		return false, digest, totalBytes, `Failed to read template file "{sourcePath}".`
+	end
+
+	local normalizedRelativePath = normalizeRelativePath(relativePath)
+	local keyLiteral = string.format("%q", normalizedRelativePath)
+	local contentLiteral = string.format("%q", content)
+	table.insert(entries, "\t[" .. keyLiteral .. "] = " .. contentLiteral .. ",")
+
+	local updatedDigest = updateTemplateDigest(digest, normalizedRelativePath)
+	updatedDigest = updateTemplateDigest(updatedDigest, "\n")
+	updatedDigest = updateTemplateDigest(updatedDigest, content)
+	local updatedTotalBytes = totalBytes + #content
+
+	return true, updatedDigest, updatedTotalBytes, nil
+end
+
 local function collectEmbeddedTemplateFileLiterals(): (boolean, { string }?, string?)
 	if not FileSystem.isDir(TEMPLATES_ROOT) then
 		return false, nil, `Missing templates root "{TEMPLATES_ROOT}".`
@@ -106,25 +132,52 @@ local function collectEmbeddedTemplateFileLiterals(): (boolean, { string }?, str
 	local entries: { string } = {}
 	local digest = 1
 	local totalBytes = 0
+	local fileCount = 0
 
 	for _, item in files do
-		local okRead, content = readSource(item.SourcePath)
-		if not okRead or content == nil then
-			return false, nil, `Failed to read template file "{item.SourcePath}".`
+		local relativePath = "templates/" .. item.RelativePath
+		local okAppend, nextDigest, nextTotalBytes, appendError = appendEmbeddedFileEntry(
+			entries,
+			relativePath,
+			item.SourcePath,
+			digest,
+			totalBytes
+		)
+		if not okAppend then
+			return false, nil, appendError
 		end
 
-		local relativePath = normalizeRelativePath(item.RelativePath)
-		local keyLiteral = string.format("%q", relativePath)
-		local contentLiteral = string.format("%q", content)
-		table.insert(entries, "\t[" .. keyLiteral .. "] = " .. contentLiteral .. ",")
-
-		digest = updateTemplateDigest(digest, relativePath)
-		digest = updateTemplateDigest(digest, "\n")
-		digest = updateTemplateDigest(digest, content)
-		totalBytes += #content
+		digest = nextDigest
+		totalBytes = nextTotalBytes
+		fileCount += 1
 	end
 
-	local version = `files-{#files}-bytes-{totalBytes}-digest-{digest}`
+	if FileSystem.isDir(MODULES_ROOT) then
+		local moduleFiles = FileSystemUtils.CollectFiles(MODULES_ROOT)
+		table.sort(moduleFiles, function(left, right)
+			return left.RelativePath < right.RelativePath
+		end)
+
+		for _, item in moduleFiles do
+			local relativePath = "modules/" .. item.RelativePath
+			local okAppend, nextDigest, nextTotalBytes, appendError = appendEmbeddedFileEntry(
+				entries,
+				relativePath,
+				item.SourcePath,
+				digest,
+				totalBytes
+			)
+			if not okAppend then
+				return false, nil, appendError
+			end
+
+			digest = nextDigest
+			totalBytes = nextTotalBytes
+			fileCount += 1
+		end
+	end
+
+	local version = `files-{fileCount}-bytes-{totalBytes}-digest-{digest}`
 	return true, entries, version
 end
 
@@ -145,44 +198,65 @@ local function appendEmbeddedTemplateBootstrap(
 	table.insert(chunks, "local function ensureStandaloneTemplatesRoot()")
 	table.insert(chunks, '\tlocal StandaloneFileSystem = require("@lune/fs")')
 	table.insert(chunks, '\tlocal StandaloneProcess = require("@lune/process")')
-	table.insert(chunks, "\tlocal tempPath = StandaloneProcess.env.TEMP")
-	table.insert(chunks, '\tif tempPath == nil or tempPath == "" then')
-	table.insert(chunks, "\t\ttempPath = StandaloneProcess.env.TMP")
-	table.insert(chunks, "\tend")
-	table.insert(chunks, '\tif tempPath == nil or tempPath == "" then')
-	table.insert(chunks, "\t\ttempPath = StandaloneProcess.env.TMPDIR")
-	table.insert(chunks, "\tend")
-	table.insert(chunks, '\tif tempPath == nil or tempPath == "" then')
-	table.insert(chunks, '\t\ttempPath = "."')
-	table.insert(chunks, "\tend")
-	table.insert(chunks, "")
 	table.insert(chunks, "\tlocal fileSystemUtils = Modules.FileSystemUtils")
+	table.insert(chunks, "\tlocal candidateRoots = {")
+	table.insert(chunks, "\t\tStandaloneProcess.env.TEMP,")
+	table.insert(chunks, "\t\tStandaloneProcess.env.TMP,")
+	table.insert(chunks, "\t\tStandaloneProcess.env.TMPDIR,")
+	table.insert(chunks, '\t\t".",')
+	table.insert(chunks, "\t}")
+	table.insert(chunks, "")
+	table.insert(chunks, "\tlocal visitedRoots: { [string]: boolean } = {}")
+	table.insert(chunks, "\tlocal lastError = nil")
+	table.insert(chunks, "")
+	table.insert(chunks, "\tfor _, rootPath in candidateRoots do")
+	table.insert(chunks, '\t\tif type(rootPath) == "string" and rootPath ~= "" then')
+	table.insert(chunks, "\t\t\tif not visitedRoots[rootPath] then")
+	table.insert(chunks, "\t\t\t\tvisitedRoots[rootPath] = true")
+	table.insert(chunks, "")
+	table.insert(chunks, "\t\t\t\tlocal okPrepare, templatesRootOrErr = pcall(function()")
 	table.insert(
 		chunks,
-		'\tlocal runtimeRoot = fileSystemUtils.JoinPath(tempPath, "sb-setup-runtime")'
+		'\t\t\t\t\tlocal runtimeRoot = fileSystemUtils.JoinPath(rootPath, "sb-setup-runtime")'
 	)
 	table.insert(
 		chunks,
-		"\tlocal versionRoot = fileSystemUtils.JoinPath(runtimeRoot, STANDALONE_TEMPLATES_VERSION)"
+		"\t\t\t\t\tlocal versionRoot = fileSystemUtils.JoinPath(runtimeRoot, STANDALONE_TEMPLATES_VERSION)"
 	)
 	table.insert(
 		chunks,
-		'\tlocal templatesRoot = fileSystemUtils.JoinPath(versionRoot, "templates")'
+		'\t\t\t\t\tlocal templatesRoot = fileSystemUtils.JoinPath(versionRoot, "templates")'
 	)
 	table.insert(chunks, "")
-	table.insert(chunks, "\tif not StandaloneFileSystem.isDir(templatesRoot) then")
-	table.insert(chunks, "\t\tfileSystemUtils.MakeDirectoryRecursive(templatesRoot)")
-	table.insert(chunks, "\t\tfor relativePath, content in STANDALONE_TEMPLATE_FILES do")
+	table.insert(chunks, "\t\t\t\t\tif not StandaloneFileSystem.isDir(templatesRoot) then")
+	table.insert(chunks, "\t\t\t\t\t\tfileSystemUtils.MakeDirectoryRecursive(versionRoot)")
+	table.insert(chunks, "\t\t\t\t\t\tfor relativePath, content in STANDALONE_TEMPLATE_FILES do")
 	table.insert(
 		chunks,
-		"\t\t\tlocal outputPath = fileSystemUtils.JoinPath(templatesRoot, relativePath)"
+		"\t\t\t\t\t\t\tlocal outputPath = fileSystemUtils.JoinPath(versionRoot, relativePath)"
 	)
-	table.insert(chunks, "\t\t\tfileSystemUtils.EnsureParentDirectory(outputPath)")
-	table.insert(chunks, "\t\t\tStandaloneFileSystem.writeFile(outputPath, content)")
+	table.insert(chunks, "\t\t\t\t\t\t\tfileSystemUtils.EnsureParentDirectory(outputPath)")
+	table.insert(chunks, "\t\t\t\t\t\t\tStandaloneFileSystem.writeFile(outputPath, content)")
+	table.insert(chunks, "\t\t\t\t\t\tend")
+	table.insert(chunks, "\t\t\t\t\tend")
+	table.insert(chunks, "")
+	table.insert(chunks, "\t\t\t\t\treturn templatesRoot")
+	table.insert(chunks, "\t\t\t\tend)")
+	table.insert(chunks, "")
+	table.insert(chunks, '\t\t\t\tif okPrepare and type(templatesRootOrErr) == "string" and templatesRootOrErr ~= "" then')
+	table.insert(chunks, "\t\t\t\t\treturn templatesRootOrErr")
+	table.insert(chunks, "\t\t\t\tend")
+	table.insert(chunks, "")
+	table.insert(chunks, "\t\t\t\tif not okPrepare then")
+	table.insert(chunks, "\t\t\t\t\tlastError = tostring(templatesRootOrErr)")
+	table.insert(chunks, "\t\t\t\telse")
+	table.insert(chunks, '\t\t\t\t\tlastError = "unknown error"')
+	table.insert(chunks, "\t\t\t\tend")
+	table.insert(chunks, "\t\t\tend")
 	table.insert(chunks, "\t\tend")
 	table.insert(chunks, "\tend")
 	table.insert(chunks, "")
-	table.insert(chunks, "\treturn templatesRoot")
+	table.insert(chunks, '\terror(lastError or "no writable runtime directory.")')
 	table.insert(chunks, "end")
 	table.insert(chunks, "")
 	table.insert(chunks, "local okTemplatesRoot, templatesRootOrErr = pcall(ensureStandaloneTemplatesRoot)")

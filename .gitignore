@@ -1,5 +1,23 @@
-# BEGIN managed-by: sb-setup id: sb.gitignore.base
+# BEGIN sb-setup:sb.gitignore
 # Story Bakery default ignores
+
+# Misc
+/.DS_Store
+/.vscode
+
+# npm
+/node_modules
+
+# Build
+/build
+/out
+
+# Temp
+tmp
+.tmp
+tmp.**
+
+# Luau and Roblox default ignores
 
 # Rojo
 /sourcemap.json
@@ -21,22 +39,4 @@ roblox_packages/
 /ServerPackages
 /DevPackages
 
-# Git
-
-# Misc
-/.DS_Store
-/.vscode
-
-# npm
-/node_modules
-
-# Build
-/build
-/out
-
-# Temp
-tmp
-.tmp
-tmp.**
-
-# END managed-by: sb-setup id: sb.gitignore.base
+# END sb-setup:sb.gitignore

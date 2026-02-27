@@ -1,4 +1,4 @@
-# BEGIN managed-by: sb-setup id: sb.gitignore.luau
+# BEGIN sb-setup:sb.gitignore mode:append
 # Luau and Roblox default ignores
 
 # Rojo
@@ -20,5 +20,4 @@ roblox_packages/
 /Packages
 /ServerPackages
 /DevPackages
-
-# END managed-by: sb-setup id: sb.gitignore.luau
+# END sb-setup:sb.gitignore

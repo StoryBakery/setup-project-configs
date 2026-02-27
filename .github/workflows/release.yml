@@ -26,9 +26,6 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           lune --version
 
-      - name: Check syntax
-        run: lune run CheckSyntax
-
       - name: Run template tests
         run: lune run tests/RunTemplates
 

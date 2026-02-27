@@ -4,7 +4,7 @@
 
 local Process = require("@lune/process")
 
-local SyncBakeryDevHandbookDocs = require("../../shared/scripts/sync_bakery_dev_handbook_docs")
+local SyncBakeryDevHandbookDocs = require("../../../modules/SyncBakeryDevHandbookDocs")
 
 SyncBakeryDevHandbookDocs.Run({
 	SkillName = "roblox-scripting",

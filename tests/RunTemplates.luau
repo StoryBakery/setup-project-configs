@@ -5,8 +5,8 @@
 local FileSystem = require("@lune/fs")
 local Process = require("@lune/process")
 
-local FileSystemUtils = require("../src/modules/FileSystemUtils")
-local TomlParser = require("../src/modules/TomlParser")
+local FileSystemUtils = require("../src/cores/FileSystemUtils")
+local TomlParser = require("../src/cores/TomlParser")
 
 local function normalizeSourcePath(source: string): string
 	local normalized = source
@@ -380,7 +380,7 @@ local function runTestCase(
 	local okExec, resultOrErr = pcall(
 		Process.exec,
 		"lune",
-		{ "run", applyScriptPath },
+		{ "run", applyScriptPath, "--worker" },
 		{ capture = true, cwd = caseRoot }
 	)
 	if not okExec then

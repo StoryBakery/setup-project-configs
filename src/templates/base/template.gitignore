@@ -1,7 +1,5 @@
-# BEGIN managed-by: sb-setup id: sb.gitignore.base
+# BEGIN sb-setup:sb.gitignore
 # Story Bakery default ignores
-
-# Git
 
 # Misc
 /.DS_Store
@@ -18,5 +16,4 @@
 tmp
 .tmp
 tmp.**
-
-# END managed-by: sb-setup id: sb.gitignore.base
+# END sb-setup:sb.gitignore

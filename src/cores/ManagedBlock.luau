@@ -32,28 +32,36 @@ end
 
 local function cleanupMarkerPayload(payload: string): string
 	local cleaned = trim(payload)
-	cleaned = cleaned:gsub("%s*-->%s*$", "")
-	cleaned = cleaned:gsub("%s*%*/%s*$", "")
 	return trim(cleaned)
 end
 
-local function parseManagedByMarkerPayload(payload: string): (string?, string?)
-	local blockId = payload:match("id%s*:%s*([^%s%]]+)")
-	if blockId == nil then
-		blockId = payload:match("id%s*=%s*([^%s%]]+)")
-	end
-	if blockId == nil then
+local function parseMarker(line: string, marker: string): (string?, string?)
+	local loweredLine = line:lower()
+	local markerTag = marker:lower() .. " "
+	local startIndex = loweredLine:find(markerTag, 1, true)
+	if startIndex == nil then
 		return nil, nil
 	end
 
-	local mode = payload:match("mode%s*:%s*([^%s%]]+)")
-	if mode == nil then
-		mode = payload:match("mode%s*=%s*([^%s%]]+)")
+	local payload = cleanupMarkerPayload(line:sub(startIndex + #markerTag))
+	local blockId, remainder = payload:match("^([^%s]+)%s*(.*)$")
+	if blockId == nil then
+		return nil, nil
 	end
 
 	blockId = trim(blockId)
 	if blockId == "" then
 		return nil, nil
+	end
+
+	local lowerBlockId = blockId:lower()
+	if not lowerBlockId:find("sb%-setup:", 1, false) then
+		return nil, nil
+	end
+
+	local mode = remainder:match("mode%s*:%s*([^%s%]]+)")
+	if mode == nil then
+		mode = remainder:match("mode%s*=%s*([^%s%]]+)")
 	end
 
 	if mode ~= nil then
@@ -64,17 +72,6 @@ local function parseManagedByMarkerPayload(payload: string): (string?, string?)
 	end
 
 	return blockId, mode
-end
-
-local function parseMarker(line: string, marker: string): (string?, string?)
-	local managedByTag = marker .. " managed-by:"
-	local startIndex = line:find(managedByTag, 1, true)
-	if startIndex then
-		local rest = cleanupMarkerPayload(line:sub(startIndex + #managedByTag))
-		return parseManagedByMarkerPayload(rest)
-	end
-
-	return nil, nil
 end
 
 local function parseBlocks(lines: { string })
@@ -191,8 +188,8 @@ local function merge(destinationText: string, templateInfo)
 			updates[blockId] = {
 				Action = "update",
 				Lines = mergedLines,
-				StartLine = templateBlock.StartLine,
-				EndLine = templateBlock.EndLine,
+				StartLine = if mode == "append" then destinationBlock.StartLine else templateBlock.StartLine,
+				EndLine = if mode == "append" then destinationBlock.EndLine else templateBlock.EndLine,
 			}
 		else
 			updates[blockId] = {
